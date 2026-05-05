@@ -1,0 +1,38 @@
+services:
+  backend:
+    build: ./backend
+    container_name: corplibrary_backend
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Persistent SQLite database
+      - db_data:/app/data
+      # ── Network share mounts ───────────────────────────────────────────────
+      # Uncomment and adjust the paths below to mount your shared folders.
+      # The backend scans whatever paths you set in the Admin → Scan Configs UI.
+      #
+      # Windows UNC example (run Docker Desktop with the shared drive enabled):
+      # - //server/hr_share:/mnt/hr:ro
+      # - //server/finance:/mnt/finance:ro
+    ports:
+      - "8000:8000"   # Expose backend directly for development / API testing
+    networks:
+      - corplib
+
+  frontend:
+    build: ./frontend
+    container_name: corplibrary_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - corplib
+
+volumes:
+  db_data:
+
+networks:
+  corplib:
+    driver: bridge
