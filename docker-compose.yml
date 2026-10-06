@@ -1,38 +1,82 @@
+# Corp Library: production stack for the department Linux server.
+#
+#   cp .env.example .env   # then fill in the values
+#   docker compose up -d --build
+#
+# Every service restarts automatically, including after a server reboot.
+
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+psycopg://corplib:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/corplib
+
 services:
-  backend:
+  db:
+    image: pgvector/pgvector:pg16  # PostgreSQL 16 with pgvector (used from phase 3)
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: corplib
+      POSTGRES_USER: corplib
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TZ:-Europe/Madrid}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U corplib -d corplib"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
     build: ./backend
-    container_name: corplibrary_backend
     restart: unless-stopped
     env_file: .env
-    volumes:
-      # Persistent SQLite database
-      - db_data:/app/data
-      # ── Network share mounts ───────────────────────────────────────────────
-      # Uncomment and adjust the paths below to mount your shared folders.
-      # The backend scans whatever paths you set in the Admin → Scan Configs UI.
-      #
-      # Windows UNC example (run Docker Desktop with the shared drive enabled):
-      # - //server/hr_share:/mnt/hr:ro
-      # - //server/finance:/mnt/finance:ro
-    ports:
-      - "8000:8000"   # Expose backend directly for development / API testing
-    networks:
-      - corplib
+    environment: *backend-env
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
-  frontend:
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    env_file: .env
+    environment: *backend-env
+    stop_grace_period: 60s  # let a running job reach a safe point
+    depends_on:
+      api:
+        condition: service_healthy  # the API runs migrations first
+
+  web:
     build: ./frontend
-    container_name: corplibrary_frontend
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "${HTTP_PORT:-80}:80"  # HTTPS (443) is added in phase 1 with the internal CA certificate
     depends_on:
-      - backend
-    networks:
-      - corplib
+      - api
+
+  backup:
+    image: pgvector/pgvector:pg16  # same version as db, for pg_dump compatibility
+    restart: unless-stopped
+    entrypoint: ["sh", "/backup.sh"]
+    environment:
+      PGHOST: db
+      PGUSER: corplib
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: corplib
+      BACKUP_HOUR: ${BACKUP_HOUR:-1}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      TZ: ${TZ:-Europe/Madrid}
+    volumes:
+      - ./deploy/backup.sh:/backup.sh:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   db_data:
-
-networks:
-  corplib:
-    driver: bridge

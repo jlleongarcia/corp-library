@@ -1,6 +1,6 @@
 # Corp Library — Roadmap
 
-_Last updated: 2026-10-06_
+_Last updated: 2026-10-06 (phase 0 implemented)_
 
 Corp Library is an internal web app that helps our department (~15 people) find documents on the
 department shares and decide where new documents belong. It indexes the 5 top-level shares on the
@@ -95,17 +95,28 @@ Each phase ends with something people can use or a decision they can make.
 
 _Goal: a full inventory of the shares, to feed the folder-plan discussions. No end-user UI yet._
 
-- [ ] Replace SQLite with PostgreSQL; add Alembic migrations (drop `create_all`)
-- [ ] New Compose stack for Linux: `nginx`, `api`, `worker`, `db` (+ volumes, health checks, `.env`)
-- [ ] SMB scanner using `smbprotocol`: walk the 5 shares, record path, size, mtime, hash, owner
-- [ ] Read folder ACLs; resolve SIDs to users/groups via LDAP; flag broken inheritance
-- [ ] Incremental rescans (skip unchanged by mtime + size); nightly schedule
-- [ ] Admin reports: inventory by share/type/age, duplicates (by hash), stale files,
-      user × folder permission grid, folders with explicit ACLs
-- [ ] Backups: nightly `pg_dump` to a mounted location
+- [x] Replace SQLite with PostgreSQL; add Alembic migrations (drop `create_all`)
+- [x] New Compose stack for Linux: `db`, `api`, `worker`, `web`, `backup` (+ volumes, health checks, `.env`)
+- [x] SMB scanner using `smbprotocol`: walk the shares, record path, size, mtime; per-folder
+      reconciliation so a transient error never wipes data
+- [x] Read folder ACLs (own security-descriptor parser); resolve SIDs to users/groups via LDAP,
+      expand nested groups; flag explicit ACLs, broken inheritance, unreadable ACLs
+- [x] Incremental rescans (only changed files are updated); nightly schedule; Postgres job queue
+- [x] Admin console + reports: inventory by share/type/age, duplicates (size → quick hash → full
+      hash), stale folders, hygiene (long paths, deep and empty folders), user × folder permission
+      grid, permission exceptions. All export to CSV
+- [x] Backups: nightly `pg_dump` to a mounted location
+- [ ] First real scan on the file server (needs the IT items below)
 
 **Exit:** a full scan completes, and the reports have been used in a folder-plan meeting.
 **Blocked by IT:** scanner account, LDAP access, firewall rules.
+
+Notes from implementation:
+- Permissions are read per **folder**. Files are assumed to inherit from their folder, which is
+  the norm; reading every file's ACL would double the SMB round-trips. Revisit if the exceptions
+  report suggests files with their own permissions.
+- Folder owners are recorded; file owners are not (same cost reason).
+- v0.1's catalog/search pages were removed; search is rebuilt on the new schema in phase 1.
 
 ### Phase 1 — Search MVP with SSO
 
@@ -196,7 +207,9 @@ cites a document the asking user can't open.
 | Initial scan of 2 TB over SMB is slow | Phase 0 takes longer | Metadata first, content extraction second; incremental afterwards; skip bulk media content |
 | ACL edge cases (deny entries, broken inheritance) | Wrong visibility | Fail closed; flag explicit ACLs; test with real users with different access |
 | Refactor moves thousands of files | Index churn, broken references | Incremental rescans by path + hash; treat moves as moves, not delete + add |
-| Single maintainer | Bus factor | Keep the stack small; document deploy/restore in `docs/OPERATIONS.md` |
+| Single maintainer | Bus factor | Keep the stack small; deploy/restore documented in `docs/OPERATIONS.md` |
+| ACLs use local groups of the file server | Those SIDs can't be resolved via LDAP, so access can't be computed | Shown as "unresolved" in the reports; ask IT to use domain groups in the new structure |
+| A file has stricter permissions than its folder | It would be visible to everyone who can open the folder | Phase 1: re-check access on open/download; add file-level ACL scanning if needed |
 
 ## Open questions
 

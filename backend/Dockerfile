@@ -1,20 +1,28 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# ldap3 needs no native deps on slim, but keep openssl for ldaps
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-COPY . .
+COPY alembic.ini .
+COPY alembic ./alembic
+COPY app ./app
 
-# Persistent database lives in a mounted volume
-RUN mkdir -p /app/data
+# Run as an unprivileged user.
+RUN useradd --system --uid 10001 --no-create-home corplib
+USER corplib
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# The same image runs the API (default) and the worker (`python -m app.worker`).
+# The API applies database migrations before starting.
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"]

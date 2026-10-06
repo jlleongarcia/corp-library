@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -16,9 +16,6 @@ class UserPublic(BaseModel):
     display_name: Optional[str] = None
     email: Optional[str] = None
     is_admin: bool = False
-    ad_groups: List[str] = []
-
-    model_config = {"from_attributes": True}
 
 
 class TokenResponse(BaseModel):
@@ -27,130 +24,62 @@ class TokenResponse(BaseModel):
     user: UserPublic
 
 
-# ── Category ──────────────────────────────────────────────────────────────────
+# ── Shares ────────────────────────────────────────────────────────────────────
 
-class CategoryBase(BaseModel):
+class ShareCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    path: str = Field(min_length=1, max_length=1024, description=r"\\server\share or a local path (dev)")
+    enabled: bool = True
+
+
+class ShareUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    path: Optional[str] = Field(default=None, min_length=1, max_length=1024)
+    enabled: Optional[bool] = None
+
+
+class SharePublic(BaseModel):
+    id: int
     name: str
-    description: Optional[str] = None
-    icon: str = "folder"
-    color: str = "#2563eb"
-    parent_id: Optional[int] = None
-    sort_order: int = 0
-
-
-class CategoryCreate(CategoryBase):
-    pass
-
-
-class CategoryUpdate(CategoryBase):
-    pass
-
-
-class CategoryPublic(CategoryBase):
-    id: int
-    path: Optional[str] = None
-    auto_generated: bool = False
-    document_count: int = 0
-    children_count: int = 0
-
-    model_config = {"from_attributes": True}
-
-
-class CategoryTree(CategoryPublic):
-    children: List["CategoryTree"] = []
-
-
-# ── Document ──────────────────────────────────────────────────────────────────
-
-class DocumentPublic(BaseModel):
-    id: int
-    title: str
-    description: Optional[str] = None
-    file_path: str
-    file_name: str
-    file_extension: Optional[str] = None
-    file_size: Optional[int] = None
-    category_id: Optional[int] = None
-    category_name: Optional[str] = None
-    category_path: Optional[str] = None
-    last_modified: Optional[datetime] = None
-    indexed_at: datetime
-    tags: List[str] = []
-    is_active: bool = True
-
-    model_config = {"from_attributes": True}
-
-
-class DocumentDetail(DocumentPublic):
-    allowed_groups: List[str] = []
-
-
-# ── Search ────────────────────────────────────────────────────────────────────
-
-class SearchResult(BaseModel):
-    id: int
-    title: str
-    description: Optional[str] = None
-    file_path: str
-    file_name: str
-    file_extension: Optional[str] = None
-    category_name: Optional[str] = None
-    category_id: Optional[int] = None
-    tags: List[str] = []
-    last_modified: Optional[datetime] = None
-    indexed_at: datetime
-    highlight_title: Optional[str] = None
-    highlight_description: Optional[str] = None
-
-
-class SearchResponse(BaseModel):
-    query: str
-    total: int
-    results: List[SearchResult]
-    page: int
-    page_size: int
-
-
-# ── Scan Config ───────────────────────────────────────────────────────────────
-
-class ScanConfigBase(BaseModel):
-    name: str
-    root_path: str
-    root_category_id: Optional[int] = None
-    allowed_groups: List[str] = []
-    max_depth: int = 5
-    file_extensions: Optional[List[str]] = None
-    is_active: bool = True
-    create_subcategories: bool = True
-
-
-class ScanConfigCreate(ScanConfigBase):
-    pass
-
-
-class ScanConfigUpdate(ScanConfigBase):
-    pass
-
-
-class ScanConfigPublic(ScanConfigBase):
-    id: int
-    last_scan: Optional[datetime] = None
-    scan_status: str = "never"
-    scan_error: Optional[str] = None
-    documents_found: int = 0
+    path: str
+    enabled: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
-# ── Admin ─────────────────────────────────────────────────────────────────────
+# ── Jobs and scans ────────────────────────────────────────────────────────────
 
-class SystemStats(BaseModel):
-    total_documents: int
-    total_categories: int
-    total_scan_configs: int
-    total_users: int
-    last_scan: Optional[datetime] = None
+class ScanRequest(BaseModel):
+    share_id: Optional[int] = None  # None = all enabled shares
 
 
-CategoryTree.model_rebuild()
+class JobPublic(BaseModel):
+    id: int
+    kind: str
+    payload: dict[str, Any]
+    status: str
+    requested_by: Optional[str]
+    created_at: datetime
+    started_at: Optional[datetime]
+    finished_at: Optional[datetime]
+    error: Optional[str]
+
+    model_config = {"from_attributes": True}
+
+
+class ScanRunPublic(BaseModel):
+    id: int
+    share_id: int
+    started_at: datetime
+    finished_at: Optional[datetime]
+    status: str
+    folders_seen: int
+    files_seen: int
+    files_added: int
+    files_updated: int
+    files_removed: int
+    error_count: int
+    error_sample: Optional[str]
+
+    model_config = {"from_attributes": True}

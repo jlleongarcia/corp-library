@@ -1,102 +1,118 @@
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 export interface User {
-  username: string;
-  display_name: string | null;
-  email: string | null;
-  is_admin: boolean;
-  ad_groups: string[];
+  username: string
+  display_name: string | null
+  email: string | null
+  is_admin: boolean
 }
 
-// ── Catalog ───────────────────────────────────────────────────────────────────
+// ── Shares and jobs ───────────────────────────────────────────────────────────
 
-export interface Category {
-  id: number;
-  name: string;
-  description: string | null;
-  icon: string;
-  color: string;
-  parent_id: number | null;
-  path: string | null;
-  sort_order: number;
-  auto_generated: boolean;
-  document_count: number;
-  children_count: number;
-  children?: Category[];
+export interface Share {
+  id: number
+  name: string
+  path: string
+  enabled: boolean
+  created_at: string
 }
 
-// ── Documents ─────────────────────────────────────────────────────────────────
+export type JobStatus = 'queued' | 'running' | 'done' | 'failed'
 
-export interface Document {
-  id: number;
-  title: string;
-  description: string | null;
-  file_path: string;
-  file_name: string;
-  file_extension: string | null;
-  file_size: number | null;
-  category_id: number | null;
-  category_name: string | null;
-  category_path: string | null;
-  last_modified: string | null;
-  indexed_at: string;
-  tags: string[];
-  is_active: boolean;
+export interface Job {
+  id: number
+  kind: 'scan' | 'resolve_principals' | 'dedupe'
+  payload: Record<string, unknown>
+  status: JobStatus
+  requested_by: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  error: string | null
 }
 
-export interface DocumentDetail extends Document {
-  allowed_groups: string[];
+export interface ScanRun {
+  id: number
+  share_id: number
+  started_at: string
+  finished_at: string | null
+  status: 'running' | 'success' | 'partial' | 'failed'
+  folders_seen: number
+  files_seen: number
+  files_added: number
+  files_updated: number
+  files_removed: number
+  error_count: number
+  error_sample: string | null
 }
 
-// ── Search ────────────────────────────────────────────────────────────────────
+// ── Reports ───────────────────────────────────────────────────────────────────
 
-export interface SearchResult {
-  id: number;
-  title: string;
-  description: string | null;
-  file_path: string;
-  file_name: string;
-  file_extension: string | null;
-  category_name: string | null;
-  category_id: number | null;
-  tags: string[];
-  last_modified: string | null;
-  indexed_at: string;
-  highlight_title: string | null;
-  highlight_description: string | null;
+export interface ShareSummary {
+  share_id: number
+  share: string
+  path: string
+  enabled: boolean
+  files: number
+  bytes: number
+  folders: number
+  last_scan_status: ScanRun['status'] | null
+  last_scan_finished: string | null
 }
 
-export interface SearchResponse {
-  query: string;
-  total: number;
-  results: SearchResult[];
-  page: number;
-  page_size: number;
+export interface SummaryReport {
+  shares: ShareSummary[]
+  by_extension: { extension: string; files: number; bytes: number }[]
+  by_age: { bucket: string; files: number; bytes: number }[]
 }
 
-// ── Admin ─────────────────────────────────────────────────────────────────────
-
-export interface ScanConfig {
-  id: number;
-  name: string;
-  root_path: string;
-  root_category_id: number | null;
-  allowed_groups: string[];
-  max_depth: number;
-  file_extensions: string[] | null;
-  is_active: boolean;
-  create_subcategories: boolean;
-  last_scan: string | null;
-  scan_status: string;
-  scan_error: string | null;
-  documents_found: number;
-  created_at: string;
+export interface DuplicateGroup {
+  size: number
+  copies: number
+  wasted_bytes: number
+  confidence: 'exact' | 'probable'
+  files: { path: string; mtime: string | null }[]
 }
 
-export interface SystemStats {
-  total_documents: number;
-  total_categories: number;
-  total_scan_configs: number;
-  total_users: number;
-  last_scan: string | null;
+export interface DuplicatesReport {
+  total_groups: number
+  total_wasted_bytes: number
+  groups: DuplicateGroup[]
+}
+
+export interface StaleFolder {
+  folder: string
+  stale_files: number
+  stale_bytes: number
+  newest_stale: string | null
+}
+
+export interface HygieneReport {
+  long_paths: { limit: number; count: number; items: { path: string; length: number }[] }
+  deep_folders: { limit: number; count: number; items: { path: string; depth: number }[] }
+  empty_folders: { count: number; items: { path: string }[] }
+}
+
+export type AccessLevel = 'full' | 'modify' | 'write' | 'read' | 'none'
+
+export interface PrincipalRef {
+  sid: string | null
+  name: string
+  display_name: string | null
+  kind: 'user' | 'group' | 'computer' | 'wellknown' | 'unknown' | 'everyone'
+}
+
+export interface PermissionGrid {
+  columns: { folder_id: number; path: string }[]
+  rows: (PrincipalRef & { cells: Record<string, AccessLevel> })[]
+}
+
+export interface AclException {
+  folder_id: number
+  path: string
+  is_share_root: boolean
+  inheritance_disabled: boolean
+  null_dacl: boolean
+  acl_error: string | null
+  entries: (PrincipalRef & { type: 'allow' | 'deny'; level: AccessLevel; inherited: boolean })[]
 }
