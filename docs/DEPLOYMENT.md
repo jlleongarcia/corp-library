@@ -11,13 +11,38 @@ How to deploy, run and recover Corp Library on the department Linux server.
 - From IT (see the IT requirements doc): the read-only scanner account, LDAP access, and firewall
   rules from the server to the file server (TCP 445) and domain controllers (TCP 636/389, 88)
 
+## How images get to the server
+
+The server doesn't build anything. On every push to `main`, the GitHub workflow
+(`.github/workflows/ci.yml`) runs the tests, builds the images and publishes them to GitHub Container
+Registry.
+
+> **Not enabled yet.** Image publishing stays off until the app is ready to deploy; until then the
+> workflow only runs the tests. To enable it: repository **Settings → Secrets and variables → Actions →
+> Variables → New repository variable** `PUBLISH_IMAGES` = `true`. After the first published run, set
+> each package's visibility to **Public** (profile → Packages → package settings) so the server can
+> pull without logging in.
+
+
+| Image | Used by |
+| --- | --- |
+| `ghcr.io/jlleongarcia/corp-library-api` | `api` and `worker` |
+| `ghcr.io/jlleongarcia/corp-library-web` | `web` |
+
+Each build is tagged `latest` and `sha-<commit>` (e.g. `sha-3f2a9c1`). The server only needs the repo for
+`docker-compose.yml`, `deploy/backup.sh` and its own `.env`, and must be able to reach `ghcr.io`
+(through the corporate proxy if Docker uses one). The repository is public, so pulling needs no login;
+if it ever becomes private, run once on the server
+`docker login ghcr.io -u jlleongarcia` with a classic personal access token that has only `read:packages`.
+
 ## First deployment
 
 ```bash
-git clone <repo> corp-library && cd corp-library
+git clone https://github.com/jlleongarcia/corp-library.git && cd corp-library
 cp .env.example .env
 nano .env        # set APP_HOST, SECRET_KEY, POSTGRES_PASSWORD, ADMIN_USERS, LDAP_*, SMB_*
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 docker compose ps            # all services "running", api "healthy"
 ```
 
@@ -50,10 +75,21 @@ and set any value for `APP_HOST`. The app is then on `http://<machine>:8510`.
 
 ## Updating
 
+Once the workflow for your commit is green on GitHub (Actions tab):
+
 ```bash
-git pull
-docker compose up -d --build   # the api applies database migrations on start
+git pull                   # only needed if docker-compose.yml, deploy/ or .env.example changed
+docker compose pull        # fetch the new :latest images
+docker compose up -d       # recreates changed containers; the api applies migrations on start
+docker image prune -f      # optional: remove old image layers
 ```
+
+### Rolling back
+
+Pin the previous build's tag (find it under the repo's **Packages**, or in the Actions run) for the three
+app services in `docker-compose.yml`, e.g. `ghcr.io/jlleongarcia/corp-library-api:sha-3f2a9c1`, then
+`docker compose up -d`. Switch back to `:latest` once the fix is published. Database migrations only
+move forward, so roll back code across a migration only after checking it's compatible.
 
 ## Logs and status
 

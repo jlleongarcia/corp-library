@@ -26,6 +26,7 @@ IT requirements and their justification live in a separate shareable doc:
 | AI | Local only: Ollama + an open model (Qwen class), `bge-m3` embeddings | Documents contain personal data; English and Spanish both supported |
 | GPU | Not guaranteed. Everything except the assistant must work well on CPU | Search delivers most of the daily value |
 | HTTPS & hostnames | Shared **Traefik** reverse proxy (separate `traefik-proxy` project) on 443; one hostname per app via DNS **A records**; internal-CA certificate, ideally wildcard | Several apps share the server; Kerberos needs a distinct hostname per app; TLS managed in one place |
+| CI/CD | GitHub Actions: tests (SQLite + PostgreSQL), frontend build, then images pushed to ghcr.io tagged `latest` + `sha-<commit>` (publishing switched on with the `PUBLISH_IMAGES` repo variable once the app is ready); the server only pulls | No builds on the server; every deployed image passed the tests; one-line rollback |
 | Maintenance | One maintainer | Keep it to a single codebase and few containers; no microservices |
 
 ## Guiding principles

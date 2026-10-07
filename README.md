@@ -1,5 +1,7 @@
 # Corp Library
 
+[![CI](https://github.com/jlleongarcia/corp-library/actions/workflows/ci.yml/badge.svg)](https://github.com/jlleongarcia/corp-library/actions/workflows/ci.yml)
+
 Internal web app that helps the department find documents on the shared folders and decide where new
 ones belong. It indexes the department shares on the Windows file server, respects the existing
 Windows permissions, and (from phase 3) adds a local AI assistant that never sends data off-premises.
@@ -32,7 +34,8 @@ backend/            FastAPI API + background worker (same image)
   tests/            pytest suite (SQLite by default, PostgreSQL via scripts/pytest_postgres.py)
 frontend/           React + Vite + Tailwind admin console, served by nginx
 deploy/backup.sh    nightly pg_dump
-docker-compose.yml  db, api, worker, web, backup
+docker-compose.yml  db, api, worker, web, backup (app images pulled from ghcr.io)
+.github/workflows/  CI: tests on every push; image publishing to ghcr.io is off until PUBLISH_IMAGES=true
 ```
 
 ## Development

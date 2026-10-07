@@ -27,7 +27,7 @@ services:
       retries: 10
 
   api:
-    build: ./backend
+    image: ghcr.io/jlleongarcia/corp-library-api:latest
     restart: unless-stopped
     env_file: .env
     environment: *backend-env
@@ -42,7 +42,7 @@ services:
       start_period: 30s
 
   worker:
-    build: ./backend
+    image: ghcr.io/jlleongarcia/corp-library-api:latest
     restart: unless-stopped
     command: ["python", "-m", "app.worker"]
     env_file: .env
@@ -53,7 +53,7 @@ services:
         condition: service_healthy  # the API runs migrations first
 
   web:
-    build: ./frontend
+    image: ghcr.io/jlleongarcia/corp-library-api:latest
     restart: unless-stopped
     # No published ports: the shared Traefik proxy (traefik-proxy project) terminates
     # HTTPS on 443 and routes APP_HOST here over the `proxy` network.
