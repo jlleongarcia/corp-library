@@ -25,6 +25,7 @@ IT requirements and their justification live in a separate shareable doc:
 | File access | **Read-only.** The app advises; users save files themselves | Safest scope and easiest for IT to approve |
 | AI | Local only: Ollama + an open model (Qwen class), `bge-m3` embeddings | Documents contain personal data; English and Spanish both supported |
 | GPU | Not guaranteed. Everything except the assistant must work well on CPU | Search delivers most of the daily value |
+| HTTPS & hostnames | Shared **Traefik** reverse proxy (separate `traefik-proxy` project) on 443; one hostname per app via DNS **A records**; internal-CA certificate, ideally wildcard | Several apps share the server; Kerberos needs a distinct hostname per app; TLS managed in one place |
 | Maintenance | One maintainer | Keep it to a single codebase and few containers; no microservices |
 
 ## Guiding principles
@@ -41,10 +42,11 @@ IT requirements and their justification live in a separate shareable doc:
 
 ```mermaid
 flowchart LR
-    PC["Department PCs<br/>(Windows, browser)"] -- "HTTPS 8510<br/>Kerberos SSO" --> NGINX
+    PC["Department PCs<br/>(Windows, browser)"] -- "HTTPS 443<br/>Kerberos SSO" --> TRAEFIK
 
-    subgraph LINUX["Linux server — Docker Compose"]
-        NGINX["nginx<br/>TLS + static UI"] --> API["api<br/>FastAPI"]
+    TRAEFIK["Traefik (shared)<br/>TLS, routes by hostname"] --> NGINX
+    subgraph LINUX["Linux server — corp-library Compose project"]
+        NGINX["web (nginx)<br/>static UI"] --> API["api<br/>FastAPI"]
         API --> DB[("PostgreSQL<br/>+ pgvector")]
         API --> LLM["ollama<br/>local LLM"]
         WORKER["worker<br/>scan · extract · embed"] --> DB
@@ -58,7 +60,7 @@ flowchart LR
 
 | Container | Role |
 | --- | --- |
-| `nginx` | Terminates TLS, serves the built React app, proxies `/api` to FastAPI |
+| `web` | nginx: serves the built React app, proxies `/api` to FastAPI. Reached only through the shared Traefik proxy, which terminates TLS |
 | `api` | FastAPI: auth, search, document streaming, assistant chat, admin |
 | `worker` | Same codebase, different entrypoint: scans, text extraction, embeddings, reports. Job queue in Postgres (no broker) |
 | `db` | PostgreSQL 16+ with `pgvector`; full-text search via `tsvector` (English + Spanish, `unaccent`) |
@@ -131,7 +133,8 @@ _Goal: everyone uses it daily to find documents._
 - [ ] Document page: metadata, preview where possible, download (re-checked), **"copy network path"**
       button (browsers block `file://` links from HTTPS pages)
 - [ ] Audit log of searches, opens and downloads
-- [ ] HTTPS with the internal CA certificate
+- [x] Shared Traefik proxy (`traefik-proxy` project) routing `APP_HOST` to the app
+- [ ] Internal CA certificate installed in traefik-proxy
 
 **Exit:** all 15 users signed in by SSO; search results match what each person can open in Explorer
 (verified with at least 3 users with different access).
@@ -194,7 +197,7 @@ cites a document the asking user can't open.
 | `Category` (auto-generated from folders) | Mixed tree + curated metadata | **Split**: the folder tree mirrors the shares; curated info moves to the folder plan (phase 2) |
 | `DEV_MODE` local admin with password | ✔ | **Rework**: dev-only fake identity (no passwords), impossible to enable in production |
 | `passlib`/bcrypt | For dev passwords | **Drop** |
-| nginx frontend container | ✔ | **Keep**, add TLS |
+| nginx frontend container | ✔ | **Keep**; TLS handled by the shared Traefik proxy |
 
 ---
 
@@ -207,7 +210,7 @@ cites a document the asking user can't open.
 | Initial scan of 2 TB over SMB is slow | Phase 0 takes longer | Metadata first, content extraction second; incremental afterwards; skip bulk media content |
 | ACL edge cases (deny entries, broken inheritance) | Wrong visibility | Fail closed; flag explicit ACLs; test with real users with different access |
 | Refactor moves thousands of files | Index churn, broken references | Incremental rescans by path + hash; treat moves as moves, not delete + add |
-| Single maintainer | Bus factor | Keep the stack small; deploy/restore documented in `docs/OPERATIONS.md` |
+| Single maintainer | Bus factor | Keep the stack small; deploy/restore documented in `docs/DEPLOYMENT.md` |
 | ACLs use local groups of the file server | Those SIDs can't be resolved via LDAP, so access can't be computed | Shown as "unresolved" in the reports; ask IT to use domain groups in the new structure |
 | A file has stricter permissions than its folder | It would be visible to everyone who can open the folder | Phase 1: re-check access on open/download; add file-level ACL scanning if needed |
 

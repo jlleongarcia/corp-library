@@ -5,7 +5,7 @@ ones belong. It indexes the department shares on the Windows file server, respec
 Windows permissions, and (from phase 3) adds a local AI assistant that never sends data off-premises.
 
 - **Roadmap and decisions:** [docs/ROADMAP.md](docs/ROADMAP.md)
-- **Deploying and running it:** [docs/OPERATIONS.md](docs/OPERATIONS.md)
+- **Deploying and running it:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
 ## Current state: phase 0 (discovery)
 

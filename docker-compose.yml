@@ -1,5 +1,6 @@
 # Corp Library: production stack for the department Linux server.
 #
+#   (start the traefik-proxy project first; it owns ports 80/443)
 #   cp .env.example .env   # then fill in the values
 #   docker compose up -d --build
 #
@@ -54,8 +55,15 @@ services:
   web:
     build: ./frontend
     restart: unless-stopped
-    ports:
-      - "${APP_PORT:-8510}:80"  # phase 1 switches this port to HTTPS with the internal CA certificate
+    # No published ports: the shared Traefik proxy (traefik-proxy project) terminates
+    # HTTPS on 443 and routes APP_HOST here over the `proxy` network.
+    networks: [default, proxy]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.corplibrary.rule=Host(`${APP_HOST:?set APP_HOST in .env}`)
+      - traefik.http.routers.corplibrary.entrypoints=websecure
+      - traefik.http.services.corplibrary.loadbalancer.server.port=80
     depends_on:
       - api
 
@@ -80,3 +88,7 @@ services:
 
 volumes:
   db_data:
+
+networks:
+  proxy:
+    external: true  # created by the traefik-proxy project; start that first
