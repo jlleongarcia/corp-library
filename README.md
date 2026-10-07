@@ -65,7 +65,9 @@ uv sync                      # creates .venv from uv.lock
 uv run scripts/dev.py        # API on http://127.0.0.1:8000; Ctrl+C stops everything
 ```
 
-The database lives in `backend/.devdata/` and survives restarts; delete that folder to start fresh.
+PostgreSQL listens on `127.0.0.1:54329` (database `corplib_dev`, user `postgres`, no password; change the
+port with `DEV_PG_PORT`). Its data and log (`postgres.log`) live in `backend/.devdata/` and survive restarts;
+stop the script and delete that folder to start fresh.
 
 **3. Run the frontend** in a second terminal:
 
