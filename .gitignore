@@ -52,3 +52,6 @@ logs/
 
 # ── Backups ───────────────────────────────────────────────────────────────────
 backups/
+
+# ── Local development data (scripts/dev.py) ──────────────────────────────────
+backend/.devdata/

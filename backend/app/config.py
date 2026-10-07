@@ -1,6 +1,12 @@
-from pydantic_settings import BaseSettings, NoDecode
-from pydantic import field_validator
+from pathlib import Path
 from typing import Annotated
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode
+
+# Local development reads the repo-root .env (the same file docker compose uses).
+# In containers the variables come from the environment and this file doesn't exist.
+ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
 
 
 def _split_csv(value):
@@ -59,7 +65,7 @@ class Settings(BaseSettings):
     dev_mode: bool = False
     dev_password: str = "dev"
 
-    model_config = {"env_file": ".env", "case_sensitive": False}
+    model_config = {"env_file": ROOT_ENV, "env_file_encoding": "utf-8", "case_sensitive": False, "extra": "ignore"}
 
     _split = field_validator(
         "admin_users", "scan_ignore_names", "scan_ignore_prefixes", "extra_baseline_sids",

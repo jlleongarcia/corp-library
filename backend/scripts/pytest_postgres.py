@@ -1,9 +1,9 @@
 """
 Run the test suite against a throwaway local PostgreSQL (no Docker needed).
 
-    python scripts/pytest_postgres.py [pytest args]
+    uv run scripts/pytest_postgres.py [pytest args]
 
-Uses the `pgserver` package (embedded PostgreSQL binaries) from requirements-dev.txt.
+Uses the `pgserver` package (embedded PostgreSQL binaries) from the dev dependency group.
 """
 
 import os
