@@ -41,7 +41,7 @@ IT requirements and their justification live in a separate shareable doc:
 
 ```mermaid
 flowchart LR
-    PC["Department PCs<br/>(Windows, browser)"] -- "HTTPS 443<br/>Kerberos SSO" --> NGINX
+    PC["Department PCs<br/>(Windows, browser)"] -- "HTTPS 8510<br/>Kerberos SSO" --> NGINX
 
     subgraph LINUX["Linux server — Docker Compose"]
         NGINX["nginx<br/>TLS + static UI"] --> API["api<br/>FastAPI"]

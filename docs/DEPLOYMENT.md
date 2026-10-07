@@ -18,7 +18,7 @@ docker compose up -d --build
 docker compose ps            # all services "running", api "healthy"
 ```
 
-Then open `http://<server>/`, sign in with your Windows account (you must be in `ADMIN_USERS`), and:
+Then open `http://<server>:8510/`, sign in with your Windows account (you must be in `ADMIN_USERS`), and:
 
 1. **Shares → Add share**: one per department share, e.g. `\\fileserver\Finance`.
 2. **Shares → Scan all**. Follow progress in **Scan activity**. The first scan of ~2 TB walks every
