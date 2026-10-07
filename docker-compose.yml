@@ -31,6 +31,8 @@ services:
     restart: unless-stopped
     env_file: .env
     environment: *backend-env
+    volumes:
+      - ./certs:/certs:ro  # internal CA for LDAPS (LDAP_CA_CERT_FILE)
     depends_on:
       db:
         condition: service_healthy
@@ -47,6 +49,8 @@ services:
     command: ["python", "-m", "app.worker"]
     env_file: .env
     environment: *backend-env
+    volumes:
+      - ./certs:/certs:ro  # internal CA for LDAPS (LDAP_CA_CERT_FILE)
     stop_grace_period: 60s  # let a running job reach a safe point
     depends_on:
       api:

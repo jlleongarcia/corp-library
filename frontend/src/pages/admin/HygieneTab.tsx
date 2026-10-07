@@ -13,6 +13,16 @@ export default function HygieneTab() {
 
   return (
     <div className="space-y-6">
+      {data.unlisted_folders.count > 0 && (
+        <Card title={`Folders that could not be listed (${data.unlisted_folders.count.toLocaleString('en-GB')})`}>
+          <p className="text-sm text-gray-500 mb-3">
+            Their contents are unknown, so the figures below are incomplete for these folders.
+            Usually the scanner account lacks permission, or the network failed during the scan.
+          </p>
+          <Table rows={data.unlisted_folders.items} rowKey={(r) => r.path} empty="None."
+            columns={[['Folder', (r) => <PathText path={r.path} />], ['Error', (r) => <span className="text-xs text-red-700">{r.error}</span>]]} />
+        </Card>
+      )}
       <div className="grid grid-cols-3 gap-4">
         <Stat label="Paths too long" value={data.long_paths.count.toLocaleString('en-GB')}
           hint={`Over ${data.long_paths.limit} characters`} />

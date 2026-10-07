@@ -118,6 +118,9 @@ Notes from implementation:
 - Permissions are read per **folder**. Files are assumed to inherit from their folder, which is
   the norm; reading every file's ACL would double the SMB round-trips. Revisit if the exceptions
   report suggests files with their own permissions.
+- A folder's own access ("can list it") is not its files' access. Phase 1 must filter files with
+  `acl.evaluate.can_read_files` (the folder's *object-inherit* ACEs), never `can_read` on the
+  folder's DACL: "Read, this folder only" would otherwise expose every file in that folder.
 - Folder owners are recorded; file owners are not (same cost reason).
 - v0.1's catalog/search pages were removed; search is rebuilt on the new schema in phase 1.
 
@@ -218,6 +221,13 @@ cites a document the asking user can't open.
 ## Open questions
 
 - [ ] Are share permissions granted to individual users or to AD groups? (Asking IT; the app handles both.)
+- [ ] **Share-level permissions:** are the 5 shares set to "Authenticated Users / Everyone: Full" at the
+      share level, with all restrictions in NTFS? The scanner only reads NTFS; a restrictive share
+      permission would make the app show files people can't open. If not, the share ACL must be read
+      too (needs `NetShareGetInfo` rights for the scanner account). See `docs/DEBUGGING.md` (BUG-006).
+- [ ] **Data Deduplication / Azure File Sync / DFS:** is any of them used on the file server or the shares?
+      Deduplicated and cloud-tiered files are reparse points; the scanner now indexes them, but DFS
+      links are skipped and would need the namespace configured. See `docs/DEBUGGING.md` (BUG-005).
 - [ ] Final hostname for the app.
 - [ ] Do PCs route intranet traffic through the corporate web proxy?
 - [ ] GPU: ask now or after phase 1?

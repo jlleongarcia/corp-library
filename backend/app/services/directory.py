@@ -42,20 +42,27 @@ WELL_KNOWN = {
 
 class Directory(Protocol):
     def lookup_sid(self, sid: str) -> Optional[dict]:
-        """Return {name, display_name, kind, dn} or None if the SID is unknown."""
+        """
+        Return {name, display_name, kind, dn}, or None if the directory says the
+        SID is unknown. Raises if the directory can't answer.
+        """
 
-    def group_user_members(self, group_dn: str) -> list[str]:
-        """Return the SIDs of all users that are (transitively) members of the group."""
+    def group_user_members(self, group_dn: str) -> list[dict]:
+        """
+        Return all users that are (transitively) members of the group, each as
+        {sid, name, display_name, kind, dn}. Raises if the directory can't answer.
+        """
 
 
 class LdapDirectory:
     def __init__(self):
-        from ldap3 import Connection, Server
+        from ldap3 import Connection
 
-        server = Server(settings.ldap_server, port=settings.ldap_port, use_ssl=settings.ldap_use_ssl)
+        from ..auth.ldap_client import make_server
+
         self.conn = Connection(
-            server, user=settings.ldap_bind_dn, password=settings.ldap_bind_password,
-            auto_bind=True, read_only=True,
+            make_server(), user=settings.ldap_bind_dn, password=settings.ldap_bind_password,
+            auto_bind=True, read_only=True, raise_exceptions=True,
         )
 
     def lookup_sid(self, sid: str) -> Optional[dict]:
@@ -79,23 +86,32 @@ class LdapDirectory:
             "dn": e.entry_dn,
         }
 
-    def group_user_members(self, group_dn: str) -> list[str]:
+    def group_user_members(self, group_dn: str) -> list[dict]:
         from ldap3 import SUBTREE
         from ldap3.utils.conv import escape_filter_chars
 
-        # LDAP_MATCHING_RULE_IN_CHAIN expands nested groups server-side.
+        # LDAP_MATCHING_RULE_IN_CHAIN expands nested groups server-side. Names come
+        # back in the same paged search, so big groups don't cost one query per user.
         flt = (
             "(&(objectCategory=person)(objectClass=user)"
             f"(memberOf:1.2.840.113556.1.4.1941:={escape_filter_chars(group_dn)}))"
         )
-        sids = []
+        members = []
         for item in self.conn.extend.standard.paged_search(
-            settings.ldap_base_dn, flt, SUBTREE, attributes=["objectSid"], paged_size=500, generator=True
+            settings.ldap_base_dn, flt, SUBTREE, attributes=["objectSid", "sAMAccountName", "displayName"],
+            paged_size=500, generator=True,
         ):
-            raw = item.get("raw_attributes", {}).get("objectSid")
-            if raw:
-                sids.append(parse_sid(raw[0])[0])
-        return sids
+            raw = item.get("raw_attributes", {}).get("objectSid") if item.get("type") == "searchResEntry" else None
+            if not raw:
+                continue
+            sid = parse_sid(raw[0])[0]
+            attrs = item.get("attributes", {})
+            sam = str(attrs.get("sAMAccountName") or sid)
+            members.append({
+                "sid": sid, "name": sam, "display_name": str(attrs.get("displayName") or sam),
+                "kind": "user", "dn": item.get("dn"),
+            })
+        return members
 
     def close(self) -> None:
         self.conn.unbind()
@@ -110,10 +126,15 @@ def referenced_sids(db: Session) -> set[str]:
 
 
 def resolve_principals(db: Session, directory: Optional[Directory], force: bool = False) -> dict:
-    """Resolve new or stale SIDs. Without a directory only well-known SIDs get names."""
+    """
+    Resolve new or stale SIDs. Without a directory only well-known SIDs get names.
+
+    A failed LDAP call never changes what we already know about a SID: it is
+    logged, counted, and retried on the next run.
+    """
     now = datetime.now(timezone.utc)
     known = {p.sid: p for p in db.scalars(select(Principal))}
-    stats = {"resolved": 0, "unknown": 0, "groups_expanded": 0}
+    stats = {"resolved": 0, "unknown": 0, "groups_expanded": 0, "errors": 0}
 
     for sid in sorted(referenced_sids(db)):
         p = known.get(sid)
@@ -122,46 +143,50 @@ def resolve_principals(db: Session, directory: Optional[Directory], force: bool 
             resolved_at = resolved_at.replace(tzinfo=timezone.utc)
         if p and not force and resolved_at and now - resolved_at < REFRESH_AFTER:
             continue
+
+        if sid in WELL_KNOWN:
+            info = {"name": WELL_KNOWN[sid], "display_name": WELL_KNOWN[sid], "kind": "wellknown", "dn": None}
+        elif directory is None:
+            info = None
+        else:
+            try:
+                # None = unknown to AD: typically a local group on the file server, or a deleted account.
+                info = directory.lookup_sid(sid) or {"kind": "unknown"}
+            except Exception as exc:
+                logger.warning("LDAP lookup failed for %s: %s", sid, exc)
+                stats["errors"] += 1
+                continue
+
         if p is None:
             p = Principal(sid=sid)
             db.add(p)
-
-        if sid in WELL_KNOWN:
-            p.name, p.display_name, p.kind, p.dn = WELL_KNOWN[sid], WELL_KNOWN[sid], "wellknown", None
-        else:
-            info = None
-            if directory is not None:
-                try:
-                    info = directory.lookup_sid(sid)
-                except Exception as exc:
-                    logger.warning("LDAP lookup failed for %s: %s", sid, exc)
-            if info:
-                p.name, p.display_name, p.kind, p.dn = info["name"], info["display_name"], info["kind"], info["dn"]
-            elif directory is not None:
-                # Typically a local group on the file server, or a deleted account.
-                p.kind = "unknown"
+        if info:
+            for key in ("name", "display_name", "kind", "dn"):
+                if key in info:
+                    setattr(p, key, info[key])
         if p.kind == "unknown":
             stats["unknown"] += 1
         else:
             stats["resolved"] += 1
 
+        expanded = True
         if p.kind == "group" and p.dn and directory is not None:
             try:
-                members = set(directory.group_user_members(p.dn))
+                members = {m["sid"]: m for m in directory.group_user_members(p.dn)}
             except Exception as exc:
                 logger.warning("LDAP member expansion failed for %s: %s", p.name, exc)
+                stats["errors"] += 1
+                expanded = False  # keep the previous members; retry next run
             else:
                 db.execute(delete(GroupMember).where(GroupMember.group_sid == sid))
                 db.add_all(GroupMember(group_sid=sid, member_sid=m) for m in members)
                 stats["groups_expanded"] += 1
-                # Make sure member users have a principal row (for report names).
-                for m in members - known.keys():
-                    info = directory.lookup_sid(m)
-                    if info:
-                        u = Principal(sid=m, resolved_at=now, **info)
-                        db.merge(u)
-                        known[m] = u
-        p.resolved_at = now
+                # Member users get (or refresh) a principal row, for report names.
+                for m, info in members.items():
+                    if m != sid:
+                        known[m] = db.merge(Principal(resolved_at=now, **info))
+        if expanded:
+            p.resolved_at = now
         known[sid] = p
         db.commit()
 

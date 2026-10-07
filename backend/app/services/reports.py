@@ -161,6 +161,7 @@ def hygiene(db: Session, share_id: Optional[int] = None, limit: int = 200) -> di
         .join(Share, Folder.share_id == Share.id)
         .where(
             Folder.parent_id.is_not(None),
+            Folder.list_error.is_(None),  # unknown contents are not "empty"
             ~exists().where(File.folder_id == Folder.id),
             ~exists().where(child.parent_id == Folder.id),
         )
@@ -169,6 +170,15 @@ def hygiene(db: Session, share_id: Optional[int] = None, limit: int = 200) -> di
     empty_count = db.scalar(select(func.count()).select_from(empty_q.subquery()))
     empty_rows = db.execute(empty_q.order_by(Folder.path).limit(limit)).all()
 
+    unlisted_q = (
+        select(Share.path, Folder.path, Folder.list_error)
+        .join(Share, Folder.share_id == Share.id)
+        .where(Folder.list_error.is_not(None))
+    )
+    unlisted_q = _share_filter(unlisted_q, Folder.share_id, share_id)
+    unlisted_count = db.scalar(select(func.count()).select_from(unlisted_q.subquery()))
+    unlisted_rows = db.execute(unlisted_q.order_by(Folder.path).limit(limit)).all()
+
     return {
         "long_paths": {"limit": LONG_PATH_LIMIT, "count": long_count, "items": [
             {"path": _display_path(sp, fp, n), "length": ln} for sp, fp, n, ln in long_rows]},
@@ -176,6 +186,8 @@ def hygiene(db: Session, share_id: Optional[int] = None, limit: int = 200) -> di
             {"path": _display_path(sp, fp), "depth": d} for sp, fp, d in deep_rows]},
         "empty_folders": {"count": empty_count, "items": [
             {"path": _display_path(sp, fp)} for sp, fp in empty_rows]},
+        "unlisted_folders": {"count": unlisted_count, "items": [
+            {"path": _display_path(sp, fp), "error": err} for sp, fp, err in unlisted_rows]},
     }
 
 

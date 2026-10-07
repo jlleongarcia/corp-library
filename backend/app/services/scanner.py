@@ -117,7 +117,8 @@ class ShareScanner:
         logger.info("Scan started: %s (%s)", self.share.name, self.share.path)
 
         try:
-            stack = [self._root()]
+            root = self._root()
+            stack = [root]
             processed = 0
             while stack:
                 folder = stack.pop()
@@ -125,7 +126,11 @@ class ShareScanner:
                 processed += 1
                 if processed % settings.scan_commit_every == 0:
                     self._flush_progress()
-            self.run.status = "partial" if self.run.error_count else "success"
+            if root.list_error:
+                # Share unreachable, wrong credentials, wrong path: nothing was scanned.
+                self.run.status = "failed"
+            else:
+                self.run.status = "partial" if self.run.error_count else "success"
         except Exception as exc:  # a failure outside a single folder: abort the run
             self.db.rollback()
             self._error("scan aborted", exc)
@@ -136,9 +141,10 @@ class ShareScanner:
             self.db.add(self.run)
             self.db.commit()
         logger.info(
-            "Scan finished: %s status=%s folders=%d files=%d (+%d ~%d -%d) errors=%d",
-            self.share.name, self.run.status, self.run.folders_seen, self.run.files_seen,
-            self.run.files_added, self.run.files_updated, self.run.files_removed, self.run.error_count,
+            "Scan finished: %s status=%s folders=%d (skipped %d) files=%d (+%d ~%d -%d) errors=%d",
+            self.share.name, self.run.status, self.run.folders_seen, self.run.folders_skipped,
+            self.run.files_seen, self.run.files_added, self.run.files_updated, self.run.files_removed,
+            self.run.error_count,
         )
         return self.run
 
@@ -165,13 +171,25 @@ class ShareScanner:
         try:
             entries = self.source.list_dir(folder.path)
         except Exception as exc:
+            # Keep previous contents and don't descend. The marker keeps reports
+            # from calling a folder we never managed to list "empty".
+            folder.list_error = f"{type(exc).__name__}: {exc}"[:500]
             self._error(f"list {self.source.display_path(folder.path)}", exc)
-            return []  # keep previous contents; don't descend
+            return []
+        folder.list_error = None
 
         dirs: dict[str, DirEntry] = {}
         files: dict[str, DirEntry] = {}
         for e in entries:
-            if _ignored(e.name) or e.is_reparse_point:
+            if _ignored(e.name):
+                continue
+            if e.is_dir and e.is_reparse_point:
+                # Junctions, symlinks, DFS links: following them could loop or leave the share.
+                # Files are kept even when they are reparse points: on a file server those are
+                # usually Data Deduplication or cloud-tiered files, which open normally.
+                self.run.folders_skipped += 1
+                logger.info("Scan %s: not following %s", self.share.name,
+                            self.source.display_path(posixpath.join(folder.path, e.name)))
                 continue
             (dirs if e.is_dir else files)[e.name] = e
 

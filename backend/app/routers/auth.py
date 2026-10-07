@@ -50,8 +50,10 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         ldap_user = authenticate_ldap(username, payload.password)
         if not ldap_user:
             raise invalid
+        # The account AD resolved, not the typed text, is the identity (and decides admin rights).
         user = CurrentUser(
-            username, ldap_user.display_name, ldap_user.email, is_admin_user(username), ldap_user.sid
+            ldap_user.username, ldap_user.display_name, ldap_user.email,
+            is_admin_user(ldap_user.username), ldap_user.sid,
         )
 
     _upsert_user(db, user)

@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     ldap_server: str = ""
     ldap_port: int = 636
     ldap_use_ssl: bool = True
+    # PEM file with the internal CA that signed the domain controllers' certificates.
+    # Empty = the system CA store. The certificate is always validated.
+    ldap_ca_cert_file: str = ""
     ldap_domain: str = "company.com"
     ldap_base_dn: str = "DC=company,DC=com"
     ldap_bind_dn: str = ""  # service account used for directory lookups
@@ -71,6 +74,19 @@ class Settings(BaseSettings):
         "admin_users", "scan_ignore_names", "scan_ignore_prefixes", "extra_baseline_sids",
         mode="before",
     )(_split_csv)
+
+
+PLACEHOLDER_SECRETS = {"", "change-me", Settings.model_fields["secret_key"].default}
+MIN_SECRET_LENGTH = 32
+
+
+def secret_key_problem(s: Settings) -> str | None:
+    """Why SECRET_KEY can't be used outside DEV_MODE, or None if it's fine."""
+    if s.secret_key in PLACEHOLDER_SECRETS:
+        return "SECRET_KEY is unset or still a placeholder"
+    if len(s.secret_key) < MIN_SECRET_LENGTH:
+        return f"SECRET_KEY must be at least {MIN_SECRET_LENGTH} characters"
+    return None
 
 
 settings = Settings()

@@ -1,11 +1,13 @@
 """LDAP / Active Directory authentication client using ldap3."""
 
 import logging
+import ssl
 from dataclasses import dataclass
 from typing import Optional
 
-from ldap3 import SUBTREE, Connection, Server
-from ldap3.core.exceptions import LDAPException
+from ldap3 import SUBTREE, Connection, Server, Tls
+from ldap3.core.exceptions import LDAPBindError, LDAPException
+from ldap3.utils.conv import escape_filter_chars
 
 from ..acl.descriptor import parse_sid
 from ..config import settings
@@ -15,48 +17,75 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LDAPUser:
-    username: str
+    username: str  # sAMAccountName as stored in AD, lower-cased
     display_name: str
     email: str
     sid: Optional[str]
+
+
+def make_server() -> Server:
+    """The domain controller, with its TLS certificate always validated."""
+    tls = None
+    if settings.ldap_use_ssl:
+        # ldap3 skips certificate validation unless told otherwise; without it,
+        # anyone in the middle could read the passwords sent in the bind.
+        tls = Tls(
+            validate=ssl.CERT_REQUIRED,
+            ca_certs_file=settings.ldap_ca_cert_file or None,
+            valid_names=[settings.ldap_server],
+        )
+    return Server(settings.ldap_server, port=settings.ldap_port, use_ssl=settings.ldap_use_ssl, tls=tls)
+
+
+def _entries(conn: Connection) -> list[dict]:
+    # Searches from the domain root can also return referrals; keep real entries only.
+    return [r for r in conn.response or [] if r.get("type") == "searchResEntry"]
 
 
 def authenticate_ldap(username: str, password: str) -> Optional[LDAPUser]:
     """
     Authenticate against Active Directory by binding as the user.
     Returns an LDAPUser on success, None on failure.
+
+    The identity returned is the account AD finds for the typed username, not
+    the typed text itself: admin rights are matched on it.
     """
     if not password:
         return None  # an empty password would be an anonymous bind
     try:
-        server = Server(settings.ldap_server, port=settings.ldap_port, use_ssl=settings.ldap_use_ssl)
         conn = Connection(
-            server, user=f"{username}@{settings.ldap_domain}", password=password,
+            make_server(), user=f"{username}@{settings.ldap_domain}", password=password,
             auto_bind=True, read_only=True,
         )
         conn.search(
             search_base=settings.ldap_user_search_base or settings.ldap_base_dn,
-            search_filter=settings.ldap_user_filter.format(username=username),
+            search_filter=settings.ldap_user_filter.format(username=escape_filter_chars(username)),
             search_scope=SUBTREE,
-            attributes=["displayName", "mail", "objectSid"],
+            attributes=["sAMAccountName", "displayName", "mail", "objectSid"],
         )
-        if not conn.response or "raw_attributes" not in conn.response[0]:
-            logger.warning("LDAP: user '%s' authenticated but no search result found.", username)
-            conn.unbind()
-            return LDAPUser(username=username, display_name=username, email="", sid=None)
-
-        entry = conn.response[0]
-        attrs, raw = entry["attributes"], entry["raw_attributes"]
-        sid = parse_sid(raw["objectSid"][0])[0] if raw.get("objectSid") else None
+        entries = _entries(conn)
         conn.unbind()
+        if len(entries) != 1:
+            # Bound fine, but we can't tie the login to exactly one account: fail closed.
+            logger.warning("LDAP: '%s' authenticated but the search found %d accounts.", username, len(entries))
+            return None
+
+        attrs, raw = entries[0]["attributes"], entries[0]["raw_attributes"]
+        sam = str(attrs.get("sAMAccountName") or "").lower()
+        if not sam:
+            logger.warning("LDAP: account found for '%s' has no sAMAccountName.", username)
+            return None
         return LDAPUser(
-            username=username,
-            display_name=str(attrs.get("displayName") or username),
+            username=sam,
+            display_name=str(attrs.get("displayName") or sam),
             email=str(attrs.get("mail") or ""),
-            sid=sid,
+            sid=parse_sid(raw["objectSid"][0])[0] if raw.get("objectSid") else None,
         )
-    except LDAPException as exc:
+    except LDAPBindError as exc:  # wrong username or password
         logger.debug("LDAP authentication failed for '%s': %s", username, exc)
+        return None
+    except LDAPException as exc:  # unreachable DC, TLS/certificate problem, ...: an admin must see it
+        logger.error("LDAP error while signing in '%s': %s: %s", username, type(exc).__name__, exc)
         return None
     except Exception as exc:
         logger.error("Unexpected LDAP error for '%s': %s", username, exc)

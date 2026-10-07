@@ -61,14 +61,18 @@ class LocalSource:
         with os.scandir(self._abs(relpath)) as it:
             for e in it:
                 st = e.stat(follow_symlinks=False)
+                is_link = e.is_symlink() or e.is_junction()
+                # A link to a directory must still count as a directory, so the
+                # scanner skips it instead of indexing it as a file.
+                is_dir = e.is_dir(follow_symlinks=is_link)
                 out.append(
                     DirEntry(
                         name=e.name,
-                        is_dir=e.is_dir(follow_symlinks=False),
-                        size=0 if e.is_dir(follow_symlinks=False) else st.st_size,
+                        is_dir=is_dir,
+                        size=0 if is_dir else st.st_size,
                         mtime=datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
                         ctime=datetime.fromtimestamp(st.st_ctime, tz=timezone.utc),
-                        is_reparse_point=e.is_symlink(),
+                        is_reparse_point=is_link,
                     )
                 )
         return out
@@ -87,7 +91,24 @@ class LocalSource:
 
 # ── SMB ───────────────────────────────────────────────────────────────────────
 
-_registered_servers: set[str] = set()
+def configure_smb_client() -> None:
+    """
+    Make the scanner account the default credentials for every SMB session.
+
+    smbclient opens a new session whenever a pooled connection has dropped, and
+    when a DFS referral sends it to another server. Those sessions take their
+    credentials from ClientConfig, not from an earlier register_session call,
+    so setting them here is what lets the worker recover from a network blip.
+    """
+    import smbclient
+
+    from ..config import settings
+
+    smbclient.ClientConfig(
+        username=settings.smb_username or None,
+        password=settings.smb_password or None,
+        auth_protocol=settings.smb_auth_protocol,
+    )
 
 
 class SmbSource:
@@ -96,19 +117,8 @@ class SmbSource:
         self.server = self.root.lstrip("\\").split("\\")[0]
 
     def _ensure_session(self) -> None:
-        if self.server in _registered_servers:
-            return
-        import smbclient
-
-        from ..config import settings
-
-        smbclient.register_session(
-            self.server,
-            username=settings.smb_username or None,
-            password=settings.smb_password or None,
-            auth_protocol=settings.smb_auth_protocol,
-        )
-        _registered_servers.add(self.server)
+        # Cheap and idempotent; re-applied so a settings change is never missed.
+        configure_smb_client()
 
     def _abs(self, relpath: str) -> str:
         return self.root + ("\\" + relpath.replace("/", "\\") if relpath else "")

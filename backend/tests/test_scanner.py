@@ -9,7 +9,7 @@ from app.acl.descriptor import FILE_GENERIC_READ, INHERITED_ACE, Ace, build_secu
 from app.models import Acl, File, Folder, Share
 from app.services.dedupe import run_dedupe
 from app.services.scanner import scan_share
-from app.services.sources import LocalSource
+from app.services.sources import DirEntry, LocalSource
 
 FINANCE = "S-1-5-21-1000-2000-3000-2201"
 HR = "S-1-5-21-1000-2000-3000-2202"
@@ -147,3 +147,54 @@ def test_dedupe_finds_exact_duplicates(db, share, tree):
     # Second run has nothing new to hash.
     again = run_dedupe(db, {share.id: src})
     assert again.quick_hashed == again.full_hashed == 0
+
+
+class ReparseSource(LocalSource):
+    """Adds a junction (folder reparse point) and a deduplicated file (file reparse point) to the root."""
+
+    def list_dir(self, relpath):
+        entries = super().list_dir(relpath)
+        if relpath == "":
+            entries += [
+                DirEntry("Link to elsewhere", is_dir=True, size=0, mtime=None, ctime=None, is_reparse_point=True),
+                DirEntry("deduped.pdf", is_dir=False, size=4096, mtime=None, ctime=None, is_reparse_point=True),
+            ]
+        return entries
+
+
+def test_reparse_folders_skipped_but_reparse_files_indexed(db, share, tree):
+    run = scan_share(db, share, ReparseSource(str(tree), sd_provider))
+    assert run.status == "success" and run.folders_skipped == 1
+    assert db.scalar(select(File).where(File.name == "deduped.pdf")) is not None
+    assert db.scalar(select(Folder).where(Folder.name == "Link to elsewhere")) is None
+
+
+def test_unreachable_share_fails_the_run(db, share, tree):
+    scan_share(db, share, LocalSource(str(tree), sd_provider))
+    run = scan_share(db, share, FlakySource(str(tree), ""))
+    assert run.status == "failed"
+    assert count(db, File) == 5  # nothing wiped
+    root = db.scalar(select(Folder).where(Folder.parent_id.is_(None)))
+    assert "STATUS_NETWORK_NAME_DELETED" in root.list_error
+
+
+def test_list_error_cleared_once_folder_lists_again(db, share, tree):
+    src = LocalSource(str(tree), sd_provider)
+    scan_share(db, share, FlakySource(str(tree), "Budget"))
+    budget = db.scalar(select(Folder).where(Folder.path == "Budget"))
+    assert budget.list_error
+    scan_share(db, share, src)
+    db.refresh(budget)
+    assert budget.list_error is None
+
+
+def test_local_symlinked_folder_is_not_indexed_as_a_file(db, share, tree, tmp_path):
+    target = tmp_path / "outside"
+    target.mkdir()
+    try:
+        os.symlink(target, tree / "link", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("creating symlinks needs extra rights on this OS")
+    run = scan_share(db, share, LocalSource(str(tree), sd_provider))
+    assert run.folders_skipped == 1
+    assert db.scalar(select(File).where(File.name == "link")) is None

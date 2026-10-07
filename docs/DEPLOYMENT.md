@@ -41,6 +41,7 @@ if it ever becomes private, run once on the server
 git clone https://github.com/jlleongarcia/corp-library.git && cd corp-library
 cp .env.example .env
 nano .env        # set APP_HOST, SECRET_KEY, POSTGRES_PASSWORD, ADMIN_USERS, LDAP_*, SMB_*
+mkdir -p certs && cp /path/to/internal-ca.pem certs/   # CA that signed the DCs' LDAPS certificates
 docker compose pull
 docker compose up -d
 docker compose ps            # all services "running", api "healthy"
@@ -124,6 +125,8 @@ docker compose start api worker
 
 | Symptom | Likely cause |
 | --- | --- |
+| api keeps restarting, log says `SECRET_KEY is unset or still a placeholder` | Set a real `SECRET_KEY` (64 hex characters) in `.env` |
+| Every LDAP sign-in fails; log mentions certificate / `invalid CA public key file` | `certs/internal-ca.pem` missing, or `LDAP_SERVER` isn't the name on the DC's certificate (use the FQDN, not an IP) |
 | Scan fails immediately with a logon error | `SMB_USERNAME`/`SMB_PASSWORD` wrong, or account locked/expired |
 | Folders show "ACL unreadable" | The scanner account lacks *Read permissions* on that folder |
 | Permission grid shows "unresolved" accounts | Local groups on the file server or deleted users; LDAP can't name them |

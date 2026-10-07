@@ -7,7 +7,7 @@ from app.services.directory import resolve_principals
 from app.services.scanner import scan_share
 from app.services.sources import LocalSource
 
-from .test_scanner import FINANCE, HR, sd_provider, tree  # noqa: F401  (fixture)
+from .test_scanner import FINANCE, HR, FlakySource, sd_provider, tree  # noqa: F401  (fixture)
 
 ALICE = "S-1-5-21-1000-2000-3000-1101"
 BOB = "S-1-5-21-1000-2000-3000-1102"
@@ -26,7 +26,17 @@ class FakeDirectory:
         return self.entries.get(sid)
 
     def group_user_members(self, dn):
-        return self.members[dn]
+        return [{"sid": s, **self.entries[s]} for s in self.members[dn]]
+
+
+class BrokenDirectory(FakeDirectory):
+    """The domain controller stops answering, as during a network blip."""
+
+    def lookup_sid(self, sid):
+        raise ConnectionError("LDAP server unreachable")
+
+    def group_user_members(self, dn):
+        raise ConnectionError("LDAP server unreachable")
 
 
 def test_login_and_admin_guard(client):
@@ -130,3 +140,50 @@ def test_group_members_are_replaced_on_refresh(db, engine, tree):  # noqa: F811
         assert db.get(Principal, FINANCE).kind == "group"
     finally:
         FakeDirectory.members["CN=Fin"] = [ALICE, BOB]
+
+
+def test_ldap_outage_keeps_known_principals(db, engine, tree):  # noqa: F811
+    _scanned(engine, tree)
+    before = db.get(Principal, FINANCE).resolved_at
+    stats = resolve_principals(db, BrokenDirectory(), force=True)
+    assert stats["errors"] > 0
+    db.expire_all()
+    fin = db.get(Principal, FINANCE)
+    assert fin.kind == "group" and fin.name == "DEPT-Finance"  # not demoted to "unknown"
+    assert fin.resolved_at == before  # retried on the next run
+    members = {m.member_sid for m in db.query(GroupMember).filter_by(group_sid=FINANCE)}
+    assert members == {ALICE, BOB}
+
+
+def test_member_expansion_failure_keeps_previous_members(db, engine, tree):  # noqa: F811
+    _scanned(engine, tree)
+
+    class MembersDown(FakeDirectory):
+        def group_user_members(self, dn):
+            raise ConnectionError("timeout")
+
+    resolve_principals(db, MembersDown(), force=True)
+    members = {m.member_sid for m in db.query(GroupMember).filter_by(group_sid=FINANCE)}
+    assert members == {ALICE, BOB}
+
+
+def test_group_members_named_without_extra_lookups(db, engine, tree):  # noqa: F811
+    _scanned(engine, tree)
+    assert db.get(Principal, ALICE).display_name == "Alice"  # from the member search itself
+
+
+def test_hygiene_reports_unlisted_folders_not_empty(client, admin_headers, engine, tree):  # noqa: F811
+    Session = sessionmaker(bind=engine, autoflush=False)
+    with Session() as db:
+        share = Share(name="Finance", path=str(tree))
+        db.add(share)
+        db.commit()
+        scan_share(db, share, LocalSource(str(tree), sd_provider))
+        # Second scan: "Budget/Old" can't be listed. It must not turn up as empty.
+        scan_share(db, share, FlakySource(str(tree), "Budget/Old"))
+    hyg = client.get("/admin/reports/hygiene", headers=admin_headers).json()
+    assert hyg["empty_folders"]["count"] == 0
+    assert hyg["unlisted_folders"]["count"] == 1
+    assert "STATUS_NETWORK_NAME_DELETED" in hyg["unlisted_folders"]["items"][0]["error"]
+    csv = client.get("/admin/reports/hygiene?format=csv", headers=admin_headers)
+    assert "could not list" in csv.text

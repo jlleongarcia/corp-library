@@ -87,6 +87,8 @@ def hygiene(
             [{"issue": "long path", "path": i["path"], "detail": i["length"]} for i in data["long_paths"]["items"]]
             + [{"issue": "deep folder", "path": i["path"], "detail": i["depth"]} for i in data["deep_folders"]["items"]]
             + [{"issue": "empty folder", "path": i["path"], "detail": ""} for i in data["empty_folders"]["items"]]
+            + [{"issue": "could not list", "path": i["path"], "detail": i["error"]}
+               for i in data["unlisted_folders"]["items"]]
         )
         return _csv(rows, "hygiene")
     return data

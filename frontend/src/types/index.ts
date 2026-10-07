@@ -38,6 +38,7 @@ export interface ScanRun {
   finished_at: string | null
   status: 'running' | 'success' | 'partial' | 'failed'
   folders_seen: number
+  folders_skipped: number
   files_seen: number
   files_added: number
   files_updated: number
@@ -91,6 +92,7 @@ export interface HygieneReport {
   long_paths: { limit: number; count: number; items: { path: string; length: number }[] }
   deep_folders: { limit: number; count: number; items: { path: string; depth: number }[] }
   empty_folders: { count: number; items: { path: string }[] }
+  unlisted_folders: { count: number; items: { path: string; error: string }[] }
 }
 
 export type AccessLevel = 'full' | 'modify' | 'write' | 'read' | 'none'

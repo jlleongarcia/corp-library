@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from sqlalchemy import text
 
-from .config import settings
+from .config import secret_key_problem, settings
 from .database import engine
 from .routers import admin, auth, reports
 
@@ -11,6 +11,13 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s: %(message)s",
 )
+
+# Tokens are signed with SECRET_KEY and carry the username that decides admin
+# rights, so a known key would let anyone mint an admin token. Refuse to start.
+if not settings.dev_mode and (problem := secret_key_problem(settings)):
+    raise RuntimeError(
+        f"{problem}. Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
 
 # The schema is managed by Alembic (`alembic upgrade head`, run by the container
 # entrypoint), never by create_all.

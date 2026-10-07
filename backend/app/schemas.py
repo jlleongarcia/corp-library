@@ -75,6 +75,7 @@ class ScanRunPublic(BaseModel):
     finished_at: Optional[datetime]
     status: str
     folders_seen: int
+    folders_skipped: int
     files_seen: int
     files_added: int
     files_updated: int

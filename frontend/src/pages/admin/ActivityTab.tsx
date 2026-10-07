@@ -94,7 +94,12 @@ export default function ActivityTab() {
             columns={[
               ['Share', (r) => shareName({ share_id: r.share_id })],
               ['Status', (r) => <ScanStatus status={r.status} at={r.finished_at ?? r.started_at} />],
-              ['Folders', (r) => r.folders_seen.toLocaleString('en-GB'), 'text-right tabular-nums'],
+              ['Folders', (r) => (
+                <span title={r.folders_skipped ? 'Junctions, symlinks or DFS links are listed but not followed' : undefined}>
+                  {r.folders_seen.toLocaleString('en-GB')}
+                  {r.folders_skipped > 0 && <span className="text-xs text-gray-500"> ({r.folders_skipped} links skipped)</span>}
+                </span>
+              ), 'text-right tabular-nums'],
               ['Files', (r) => r.files_seen.toLocaleString('en-GB'), 'text-right tabular-nums'],
               ['Changes', (r) => <span className="text-xs tabular-nums">+{r.files_added} ~{r.files_updated} −{r.files_removed}</span>],
               ['Duration', (r) => duration(r.started_at, r.finished_at), 'tabular-nums'],

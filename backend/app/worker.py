@@ -9,7 +9,7 @@ import logging
 import signal
 import time
 import traceback
-from datetime import date, datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
@@ -25,6 +25,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(
 logger = logging.getLogger("worker")
 
 POLL_SECONDS = 5
+# A nightly scan missed because the worker was busy still runs if the worker frees
+# up within this window; later than that it waits for the next night rather than
+# loading the file server during working hours.
+CATCH_UP = timedelta(hours=4)
 _stop = False
 
 
@@ -59,20 +63,30 @@ def run_job(db, job: Job) -> None:
         raise RuntimeError(f"Unknown job kind {job.kind}")
 
 
-def maybe_schedule(db, last_scheduled: date | None) -> date | None:
+def maybe_schedule(db, last_scheduled: datetime | None, now: datetime | None = None) -> datetime | None:
+    """
+    Queue the nightly pipeline once per day, at SCAN_HOUR or as soon as the worker
+    is free within CATCH_UP afterwards. The worker only checks between jobs,
+    so a long job running across SCAN_HOUR must not make the night's scan vanish.
+    Returns the slot that was handled, so it is checked only once.
+    """
     if settings.scan_hour < 0:
         return last_scheduled
-    now = datetime.now().astimezone()  # local time (TZ env var), timezone-aware
-    if now.hour == settings.scan_hour and last_scheduled != now.date():
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        already = db.scalar(select(Job.id).where(
-            Job.kind == jobs.SCAN, Job.requested_by == "schedule", Job.created_at >= midnight
-        ).limit(1))
-        if already is None:
-            logger.info("Nightly schedule: queueing a full scan.")
-            jobs.enqueue_full_pipeline(db, requested_by="schedule")
-        return now.date()
-    return last_scheduled
+    now = now or datetime.now().astimezone()  # local time (TZ env var), timezone-aware
+    slot = now.replace(hour=settings.scan_hour, minute=0, second=0, microsecond=0)
+    if slot > now:
+        slot -= timedelta(days=1)  # the most recent SCAN_HOUR
+    if slot == last_scheduled or now - slot >= CATCH_UP:
+        return last_scheduled
+    already = db.scalar(select(Job.id).where(
+        Job.kind == jobs.SCAN, Job.requested_by == "schedule", Job.created_at >= slot
+    ).limit(1))
+    if already is None:
+        late = now - slot
+        logger.info("Nightly schedule: queueing a full scan%s.",
+                    f" ({int(late.total_seconds() // 60)} min late)" if late >= timedelta(minutes=5) else "")
+        jobs.enqueue_full_pipeline(db, requested_by="schedule")
+    return slot
 
 
 def main() -> None:

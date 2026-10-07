@@ -48,6 +48,8 @@ class ScanRun(Base):
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(20), default="running")  # running|success|partial|failed
     folders_seen: Mapped[int] = mapped_column(Integer, default=0)
+    # Junctions, symlinks and DFS links: not followed (could loop or leave the share).
+    folders_skipped: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     files_seen: Mapped[int] = mapped_column(Integer, default=0)
     files_added: Mapped[int] = mapped_column(Integer, default=0)
     files_updated: Mapped[int] = mapped_column(Integer, default=0)
@@ -102,6 +104,8 @@ class Folder(Base):
     owner_sid: Mapped[Optional[str]] = mapped_column(String(184))
     mtime: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     acl_error: Mapped[Optional[str]] = mapped_column(String(500))
+    # Set while the folder can't be listed: its contents are unknown, not empty.
+    list_error: Mapped[Optional[str]] = mapped_column(String(500))
 
     acl: Mapped[Optional[Acl]] = relationship()
 

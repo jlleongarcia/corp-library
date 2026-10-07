@@ -4,7 +4,7 @@ from app.acl.descriptor import (
     FILE_ALL_ACCESS, FILE_GENERIC_READ, GENERIC_READ, INHERIT_ONLY_ACE, INHERITED_ACE,
     Ace, DescriptorError, build_security_descriptor, parse_security_descriptor, parse_sid, sid_to_bytes,
 )
-from app.acl.evaluate import access_level, can_read, effective_mask
+from app.acl.evaluate import access_level, can_read, can_read_files, effective_mask, file_aces
 
 ALICE = "S-1-5-21-1000-2000-3000-1101"
 BOB = "S-1-5-21-1000-2000-3000-1102"
@@ -85,3 +85,37 @@ def test_access_levels():
     assert access_level(FILE_GENERIC_READ) == "read"
     assert access_level(0) == "none"
     assert access_level(effective_mask([Ace(ALICE, "allow", MODIFY, 0)], {ALICE})) == "modify"
+
+
+# ── Files inside a folder (BUG-007) ──────────────────────────────────────────
+
+THIS_FOLDER_ONLY = 0x0
+FILES_ONLY = 0x1 | INHERIT_ONLY_ACE  # object inherit + inherit only
+FOLDER_SUBFOLDERS_FILES = 0x3
+
+
+def test_this_folder_only_lets_users_list_but_not_open_files():
+    aces = [Ace(FINANCE, "allow", FILE_GENERIC_READ, THIS_FOLDER_ONLY)]
+    assert can_read(aces, {FINANCE})  # can list the folder
+    assert not can_read_files(aces, {FINANCE})  # but its files don't inherit the ACE
+
+
+def test_files_only_grant_applies_to_files_not_the_folder():
+    aces = [Ace(FINANCE, "allow", FILE_GENERIC_READ, FILES_ONLY)]
+    assert not can_read(aces, {FINANCE})
+    assert can_read_files(aces, {FINANCE})
+
+
+def test_inherited_deny_on_files_is_kept_in_order():
+    aces = [
+        Ace(ALICE, "deny", FILE_GENERIC_READ, FOLDER_SUBFOLDERS_FILES),
+        Ace(FINANCE, "allow", MODIFY, FOLDER_SUBFOLDERS_FILES),
+    ]
+    assert not can_read_files(aces, {ALICE, FINANCE})
+    assert can_read_files(aces, {BOB, FINANCE})
+    assert all(a.flags & INHERITED_ACE and not a.flags & INHERIT_ONLY_ACE for a in file_aces(aces))
+
+
+def test_creator_owner_never_grants_on_files():
+    aces = [Ace("S-1-3-0", "allow", FILE_ALL_ACCESS, FILES_ONLY)]
+    assert not can_read_files(aces, {"S-1-3-0", ALICE})
