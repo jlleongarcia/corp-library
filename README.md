@@ -8,6 +8,7 @@ Windows permissions, and (from phase 3) adds a local AI assistant that never sen
 
 - **Roadmap and decisions:** [docs/ROADMAP.md](docs/ROADMAP.md)
 - **Deploying and running it:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+- **Privacy notice and why it's needed:** [docs/PRIVACY.md](docs/PRIVACY.md)
 
 ## Current state: phase 1 (search)
 

@@ -193,6 +193,9 @@ class PrivacyInfo(BaseModel):
     controller_address: str
     contact: str
     dpo: str
+    record_url: str  # entry in the public record of processing activities
+    authority_name: str  # supervisory authority for complaints
+    authority_url: str
     audit_retention_days: int
     backup_keep_days: int
     session_days: int

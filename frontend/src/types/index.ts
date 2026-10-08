@@ -14,6 +14,11 @@ export interface PrivacyInfo {
   controller_address: string
   contact: string
   dpo: string
+  /** entry in the public record of processing activities (LOPDGDD art. 31.2) */
+  record_url: string
+  /** supervisory authority for complaints: the AEPD or a regional one */
+  authority_name: string
+  authority_url: string
   audit_retention_days: number
   backup_keep_days: number
   session_days: number

@@ -16,13 +16,17 @@ def test_privacy_facts_are_public_and_say_what_is_missing(client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["missing"] == [
         "PRIVACY_CONTROLLER", "PRIVACY_CONTROLLER_ID", "PRIVACY_CONTROLLER_ADDRESS", "PRIVACY_CONTACT",
+        "PRIVACY_DPO", "PRIVACY_RECORD_URL",  # both mandatory for a public body
     ]
-    monkeypatch.setattr(settings, "privacy_controller", "Ejemplo Ingeniería, S.L.")
-    monkeypatch.setattr(settings, "privacy_controller_id", "B00000000")
+    assert r.json()["authority_name"].endswith("(AEPD)")  # unless a regional authority is set
+    monkeypatch.setattr(settings, "privacy_controller", "Dirección General de Ejemplo")
+    monkeypatch.setattr(settings, "privacy_controller_id", "S0000000A")
     monkeypatch.setattr(settings, "privacy_controller_address", "Calle Mayor 1, Madrid")
     monkeypatch.setattr(settings, "privacy_contact", "privacidad@ejemplo.es")
+    monkeypatch.setattr(settings, "privacy_dpo", "dpd@ejemplo.es")
+    monkeypatch.setattr(settings, "privacy_record_url", "https://transparencia.ejemplo.es/rat#corp-library")
     info = client.get("/privacy").json()
-    assert info["missing"] == [] and info["controller"] == "Ejemplo Ingeniería, S.L."
+    assert info["missing"] == [] and info["controller"] == "Dirección General de Ejemplo"
     assert info["audit_retention_days"] == settings.audit_retention_days
 
 

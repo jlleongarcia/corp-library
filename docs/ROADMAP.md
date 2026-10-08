@@ -140,8 +140,10 @@ _Goal: everyone uses it daily to find documents._
 - [x] Shared Traefik proxy (`traefik-proxy` project) routing `APP_HOST` to the app
 - [ ] Internal CA certificate installed in traefik-proxy
 - [ ] SSO tested on a domain PC; permission results checked against Explorer with 3 real users
-- [x] Privacy notice (first layer on every page, full notice at `/privacy`), BUG-033
-- [ ] Privacy notice completed and approved by the company (controller details, DPO, works council)
+- [ ] Privacy notice (first layer on every page, full notice at `/privacy`), BUG-033: **draft in the code,
+      pending expert legal review**
+- [ ] Privacy notice approved by the institution: DPO review, record of processing published, ENS scope,
+      DPIA assessed, staff representatives informed (checklist in `docs/PRIVACY.md`)
 
 **Exit:** all 15 users signed in by SSO; search results match what each person can open in Explorer
 (verified with at least 3 users with different access).
@@ -261,7 +263,7 @@ cites a document the asking user can't open.
 | Single maintainer | Bus factor | Keep the stack small; deploy/restore documented in `docs/DEPLOYMENT.md` |
 | ACLs use local groups of the file server | Those SIDs can't be resolved via LDAP, so access can't be computed | Shown as "unresolved" in the reports; ask IT to use domain groups in the new structure |
 | A file has stricter permissions than its folder | It would be visible to everyone who can open the folder | Its own ACL is read with its text (BUG-023) and filters name, text and snippets; files indexed by name only follow their folder, and open/download always re-check live |
-| Employees not informed of the activity log | GDPR / LOPDGDD breach; works council objections | Privacy notice in the app (BUG-033); company to fill in controller details, update its record of processing, assess a DPIA and inform the works council before launch |
+| Staff not informed of the activity log | GDPR / LOPDGDD breach; log unusable as evidence; staff representatives' objections | Draft privacy notice in the app (BUG-033), written for a Spanish public institution (no legitimate interest; ENS; mandatory DPO), pending expert review; go-live checklist in `docs/PRIVACY.md` |
 
 ## Open questions
 

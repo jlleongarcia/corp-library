@@ -96,14 +96,21 @@ class Settings(BaseSettings):
     audit_retention_days: int = 365  # 0 keeps everything (not compatible with the GDPR)
     backup_keep_days: int = 14  # the backup container's setting, quoted by the privacy notice
 
-    # ── Privacy notice (BUG-033) ──────────────────────────────────────────────
+    # ── Privacy notice (BUG-033, docs/PRIVACY.md) ─────────────────────────────
     # Shown at the bottom of every page and in full at /privacy. GDPR art. 13 requires
-    # the controller's identity and contact details: fill these in before going live.
-    privacy_controller: str = ""  # the employer's legal name, e.g. "Ejemplo Ingeniería, S.L."
-    privacy_controller_id: str = ""  # NIF
-    privacy_controller_address: str = ""  # registered address
-    privacy_contact: str = ""  # where people exercise their rights (email or postal address)
-    privacy_dpo: str = ""  # Data Protection Officer's contact, if one is designated
+    # these: the notice shows "[pendiente: ...]" for each one left empty.
+    privacy_controller: str = ""  # the public body responsible, e.g. "Dirección General de ..."
+    privacy_controller_id: str = ""  # its NIF
+    privacy_controller_address: str = ""  # its address
+    privacy_contact: str = ""  # where people exercise their rights (email, electronic office, address)
+    privacy_dpo: str = ""  # Data Protection Officer's contact: mandatory for public bodies (GDPR art. 37.1.a)
+    # This processing's entry in the institution's public record of processing activities
+    # (LOPDGDD art. 31.2 requires public bodies to publish it).
+    privacy_record_url: str = ""
+    # Supervisory authority. The AEPD, unless the institution belongs to an autonomous
+    # community with its own authority for its public sector (LOPDGDD art. 57).
+    privacy_authority_name: str = "Agencia Española de Protección de Datos (AEPD)"
+    privacy_authority_url: str = "https://www.aepd.es"
 
     # ── Duplicate detection ───────────────────────────────────────────────────
     dedupe_min_size: int = 1024  # bytes; tiny files aren't worth reporting

@@ -65,12 +65,13 @@ From then on everything runs nightly at `SCAN_HOUR` (default 02:00).
 
 ### Before people use it
 
-- **Privacy notice.** Fill in `PRIVACY_CONTROLLER`, `PRIVACY_CONTROLLER_ID`, `PRIVACY_CONTROLLER_ADDRESS`
-  and `PRIVACY_CONTACT` (and `PRIVACY_DPO` if there is one) with whoever handles data protection. Until
-  then the notice at the bottom of every page shows `[pendiente: …]` and the api logs a warning at
-  startup. The text itself is in `frontend/src/pages/PrivacyPage.tsx`; it describes what the app
-  actually logs and for how long (`AUDIT_RETENTION_DAYS`, `SESSION_DAYS`, `BACKUP_KEEP_DAYS`), so
-  review it with them as well.
+- **Privacy notice.** The notice in the code is a **draft pending expert legal review** (BUG-033): get it
+  assessed first. Then work through the checklist in [PRIVACY.md](PRIVACY.md#7-before-go-live-what-the-institution-must-do)
+  with the Data Protection Officer, then fill in every `PRIVACY_*` setting (controller, NIF, address,
+  contact, DPO, record of processing URL, and the authority if it isn't the AEPD). Until then the
+  notice at the bottom of every page shows `[pendiente: …]` and the api logs a warning at startup. The
+  text is in `frontend/src/pages/PrivacyPage.tsx`; it quotes `AUDIT_RETENTION_DAYS`, `SESSION_DAYS` and
+  `BACKUP_KEEP_DAYS`, so changing them changes what staff are told.
 - **Sign-in throttling.** Ask IT for the domain's account lockout policy and set `LOGIN_MAX_FAILURES`
   below its threshold and `LOGIN_WINDOW_MINUTES` at or above its reset time.
 - **HTTPS only.** nginx sends `Strict-Transport-Security` (1 year): once a browser has visited over HTTPS

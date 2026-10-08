@@ -57,7 +57,7 @@ Run every check with `cd backend && uv run pytest` (SQLite) and `uv run scripts/
 | [BUG-030](#bug-030) | Low | Renaming a share left the old name in the search index | Before production | ✅ | `test_search.py::test_renamed_share_is_found_by_its_new_name` |
 | [BUG-031](#bug-031) | Low | No Content-Security-Policy or HSTS | Before production | 🟡 | CI `.github/ci/smoke_test.sh` (✅ after its next green run) |
 | [BUG-032](#bug-032) | Low | Download keeps the SMB file open if the browser disconnects early | Before production | ✅ | `test_search.py::test_download_handle_is_closed_even_if_never_read` |
-| [BUG-033](#bug-033) | Medium | No privacy notice for sign-in data and the audit log (GDPR / LOPDGDD) | Before production | 🟡 | `test_privacy.py` (3 tests); company approval |
+| [BUG-033](#bug-033) | Medium | No privacy notice for sign-in data and the audit log (GDPR / LOPDGDD) | Before production | ⬜ | Draft notice in code (`test_privacy.py`); pending expert legal review |
 | [BUG-034](#bug-034) | Medium | Google Fonts sends every user's IP address to Google | Before production | ✅ | CI `.github/ci/smoke_test.sh` ("index.html loads nothing from other sites") |
 
 ---
@@ -436,20 +436,24 @@ closed by the generator, which never runs in that case.
 ### BUG-033
 
 **No privacy notice.** Sign-ins, searches (with the words typed), views and downloads are logged with
-the user's name and IP for a year. In Spain, employees must be informed (GDPR arts. 13 and 14, LOPDGDD
-arts. 11 and 87, Estatuto de los Trabajadores art. 20.3).
+the user's name and IP for a year. Staff must be informed beforehand (GDPR arts. 13 and 14, LOPDGDD
+arts. 11 and 87, TREBEP art. 14.j bis, Estatuto de los Trabajadores art. 20.3). Why, and the legal
+analysis for a Spanish public institution: [docs/PRIVACY.md](PRIVACY.md).
 
 - **Fix:** first layer (LOPDGDD art. 11) at the bottom of every page and on the sign-in page; full notice
-  at `/privacy`, Spanish (authoritative) and English, public. Controller details come from `PRIVACY_*`
-  in `.env` (shown as `[pendiente: …]` until set; the api warns at startup), retention periods from the
-  settings the code applies. To make the notice true: reading the audit log is itself logged
-  (`audit_read`), and accounts unused for `AUDIT_RETENTION_DAYS` are deleted.
+  at `/privacy`, Spanish (authoritative) and English, public. Written for a public institution: bases
+  6.1.e and 6.1.c (no legitimate interest), the log grounded on the ENS (RD 311/2022), mandatory DPO,
+  link to the published record of processing, configurable supervisory authority (AEPD or regional).
+  Institution details come from `PRIVACY_*` in `.env` (shown as `[pendiente: …]` until set; the api warns
+  at startup), retention periods from the settings the code applies. To make the notice true: reading the
+  audit log is itself logged (`audit_read`), and accounts unused for `AUDIT_RETENTION_DAYS` are deleted.
 - **Files:** `frontend/src/pages/PrivacyPage.tsx`, `frontend/src/components/privacy.tsx`,
   `backend/app/routers/privacy.py`, `backend/app/services/audit.py`, `backend/app/routers/reports.py`,
-  `backend/app/worker.py`, `.env.example`
-- **Status:** 🟡 Fixed in code. The company must fill in the controller details, review the text, add
-  the processing to its record of processing activities (GDPR art. 30), assess whether a DPIA is
-  required, and inform the works council (ET art. 64.5; LOPDGDD art. 87.3).
+  `backend/app/worker.py`, `.env.example`, `docs/PRIVACY.md`
+- **Status:** ⬜ Open: the notice is a **draft**. Its wording and legal analysis are pending assessment by
+  experienced people (the DPO and the institution's legal service). Close it only after that review and
+  the go-live checklist in `docs/PRIVACY.md` (record of processing, ENS scope, DPIA assessment, staff
+  representatives, `PRIVACY_*`).
 
 ### BUG-034
 
