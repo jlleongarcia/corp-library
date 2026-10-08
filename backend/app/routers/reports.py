@@ -6,11 +6,11 @@ import json
 from datetime import date, datetime
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from ..auth.sessions import require_admin
+from ..auth.sessions import CurrentUser, require_admin
 from ..database import get_db
 from ..schemas import AuditEventPublic
 from ..services import audit, reports
@@ -138,12 +138,17 @@ def permissions(max_depth: int = Query(2, ge=0, le=10), format: Format = "json",
 
 @router.get("/audit")
 def audit_log(
+    request: Request,
     username: Optional[str] = Query(None, max_length=100), action: Optional[str] = None,
     since: Optional[date] = None, until: Optional[date] = None,
     limit: int = Query(200, ge=1, le=10_000), offset: int = Query(0, ge=0),
-    format: Format = "json", db: Session = Depends(get_db),
+    format: Format = "json", db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin),
 ):
     data = audit.query(db, username, action, since, until, limit, offset)
+    if offset == 0:  # one record per query, not per page
+        filters = {k: str(v) for k, v in {"about_user": username, "about_action": action, "since": since,
+                                          "until": until, "format": format}.items() if v}
+        audit.record(db, "audit_read", user.username, request, **filters)
     if format == "csv":
         rows = [
             {"at": e.at, "user": e.username or "", "action": e.action, "path": e.path or "",

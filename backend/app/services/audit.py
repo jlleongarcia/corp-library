@@ -13,7 +13,8 @@ from ..models import AuditEvent
 
 logger = logging.getLogger(__name__)
 
-ACTIONS = ("sign_in", "sign_in_failed", "sign_out", "search", "view", "preview", "download", "denied")
+# audit_read: an admin queried the log itself, so looking at people's activity leaves a trace too.
+ACTIONS = ("sign_in", "sign_in_failed", "sign_out", "search", "view", "preview", "download", "denied", "audit_read")
 
 
 def record(

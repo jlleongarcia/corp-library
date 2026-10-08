@@ -11,6 +11,7 @@ import { formatDateTime } from './admin/ActivityTab'
 
 const INDEX_NOTE: Record<IndexStatus, string> = {
   pending: 'The text of this document is being indexed; for now it is found by name and folder only.',
+  extracting: 'The text of this document is being indexed; for now it is found by name and folder only.',
   text: '',
   ocr: 'The text was read from a scan (OCR) and may contain recognition errors.',
   empty: 'This document contains no text to search.',

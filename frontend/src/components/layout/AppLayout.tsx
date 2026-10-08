@@ -2,6 +2,7 @@ import { Outlet, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
 import { Spinner } from '../ui'
 import Header from './Header'
+import { PrivacyFooter } from '../privacy'
 
 export default function AppLayout() {
   const { status } = useAuth()
@@ -20,6 +21,7 @@ export default function AppLayout() {
       <main className="flex-1 w-full max-w-screen-xl mx-auto p-4 md:p-6">
         <Outlet />
       </main>
+      <PrivacyFooter className="w-full max-w-screen-xl mx-auto px-4 md:px-6 pb-6 pt-2 border-t border-gray-200" />
     </div>
   )
 }

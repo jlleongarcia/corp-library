@@ -13,7 +13,7 @@ stricter permissions than its folder, and changes since the last scan.
 
 import logging
 import posixpath
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Optional
@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from ..acl.descriptor import parse_security_descriptor
 from ..acl.evaluate import can_read
 from ..models import Document, File, Folder, Share
-from .access import listable_folder_acl_ids, readable_file_acl_ids
+from .access import file_access, listable_folder_acl_ids
 from .search import file_path
 from .sources import FileSource, source_for
 
@@ -92,10 +92,14 @@ def browse(db: Session, token: frozenset[str], folder_id: int) -> dict:
         select(Folder).where(Folder.parent_id == folder.id, Folder.acl_id.in_(listable))
         .order_by(func.lower(Folder.name))
     ).all()
-    files_visible = folder.acl_id in set(readable_file_acl_ids(db, token))
+    access = file_access(db, token)
     files = db.scalars(
-        select(File).where(File.folder_id == folder.id).order_by(func.lower(File.name)).limit(MAX_FILES_LISTED + 1)
-    ).all() if files_visible else []
+        select(File).join(Folder, File.folder_id == Folder.id)
+        .where(File.folder_id == folder.id, access.clause())
+        .order_by(func.lower(File.name)).limit(MAX_FILES_LISTED + 1)
+    ).all()
+    # Files with permissions of their own (BUG-023) may be visible where the rest aren't.
+    files_hidden = not files and folder.acl_id not in access.folder_acl_ids
 
     return {
         "folder": {
@@ -108,7 +112,7 @@ def browse(db: Session, token: frozenset[str], folder_id: int) -> dict:
             {"file_id": f.id, "name": f.name, "extension": f.extension, "size": f.size, "mtime": f.mtime}
             for f in files[:MAX_FILES_LISTED]
         ],
-        "files_hidden": not files_visible,  # can list the folder but not open its files
+        "files_hidden": files_hidden,  # can list the folder but not open its files
         "files_truncated": len(files) > MAX_FILES_LISTED,
     }
 
@@ -142,7 +146,7 @@ def get_document(db: Session, token: frozenset[str], file_id: int) -> DocumentRe
     if row is None:
         raise NotFound()
     file, folder, share = row
-    if not share.enabled or folder.acl_id not in set(readable_file_acl_ids(db, token)):
+    if not share.enabled or not file_access(db, token).can_open(file.acl_id, folder.acl_id):
         raise NotFound()
     return DocumentRef(file, folder, share, db.get(Document, file.id))
 
@@ -160,10 +164,12 @@ def check_live_access(ref: DocumentRef, token: frozenset[str], source: Optional[
     return source
 
 
-def open_stream(source: FileSource, relpath: str) -> Iterator[bytes]:
+def open_stream(source: FileSource, relpath: str) -> tuple[Iterator[bytes], Callable[[], None]]:
     """
     Open the file now (so a failure is still an HTTP error, not a cut-off
-    download) and return an iterator over its chunks that closes it at the end.
+    download). Returns an iterator over its chunks and a function that closes
+    it: the response calls that when it ends, however it ends, because a browser
+    that disconnects before the first chunk never runs the iterator (BUG-032).
     """
     stack = ExitStack()
     fh = stack.enter_context(source.open_read(relpath))
@@ -173,4 +179,4 @@ def open_stream(source: FileSource, relpath: str) -> Iterator[bytes]:
             while chunk := fh.read(CHUNK):
                 yield chunk
 
-    return chunks()
+    return chunks(), stack.close

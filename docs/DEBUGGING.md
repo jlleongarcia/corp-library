@@ -1,6 +1,6 @@
 # Corp Library — Bug log
 
-_Last updated: 2026-10-07_
+_Last updated: 2026-10-08_
 
 Every bug found in the app, what we did about it, and whether the fix is in. New bugs get the next
 `BUG-NNN` number and a row in the table; details go in a section below.
@@ -25,7 +25,7 @@ Run every check with `cd backend && uv run pytest` (SQLite) and `uv run scripts/
 
 | ID | Severity | Bug | Due | Status | Check |
 | --- | --- | --- | --- | --- | --- |
-| [BUG-001](#bug-001) | Critical | `web` service runs the API image | Before production | 🟡 | CI `.github/ci/smoke_test.sh` (✅ after its first green run) |
+| [BUG-001](#bug-001) | Critical | `web` service runs the API image | Before production | ✅ | CI `.github/ci/smoke_test.sh` |
 | [BUG-002](#bug-002) | Critical | Default `SECRET_KEY` lets anyone mint admin tokens | Before first real scan | ✅ | `test_hardening.py::test_unknown_or_forged_session_cookie_is_rejected` and 3 more |
 | [BUG-003](#bug-003) | Critical | LDAPS doesn't validate the DC certificate | Before first real scan | 🟡 | `test_hardening.py::test_ldaps_always_validates_the_certificate` + first real sign-in |
 | [BUG-004](#bug-004) | High | SMB session never re-authenticates after a dropped connection | Before first real scan | 🟡 | `test_hardening.py::test_smb_credentials_become_the_client_default` + real scan |
@@ -35,7 +35,7 @@ Run every check with `cd backend && uv run pytest` (SQLite) and `uv run scripts/
 | [BUG-008](#bug-008) | High | Nightly scan skipped if the worker is busy at `SCAN_HOUR` | Before first real scan | ✅ | `test_hardening.py::test_nightly_scan_catches_up_after_a_long_job` |
 | [BUG-009](#bug-009) | High | Transient LDAP error marks known users/groups "unknown" | Before first real scan | ✅ | `test_api.py::test_ldap_outage_keeps_known_principals` and 2 more |
 | [BUG-010](#bug-010) | Medium | Login identity is the typed username; LDAP filter not escaped | Before first real scan | ✅ | `test_hardening.py::test_login_identity_is_the_account_ad_returns` and 2 more |
-| [BUG-011](#bug-011) | Medium | nginx drops security headers on `index.html` | Before production | 🟡 | CI `.github/ci/smoke_test.sh` (✅ after its first green run) |
+| [BUG-011](#bug-011) | Medium | nginx drops security headers on `index.html` | Before production | ✅ | CI `.github/ci/smoke_test.sh` |
 | [BUG-012](#bug-012) | Medium | CSV exports open to formula injection in Excel | Before production | ✅ | `test_search.py::test_searches_views_and_downloads_are_audited` |
 | [BUG-013](#bug-013) | Medium | Unreachable share = "partial"; unlisted folders reported "empty" | Before first real scan | ✅ | `test_scanner.py::test_unreachable_share_fails_the_run`, `test_api.py::test_hygiene_reports_unlisted_folders_not_empty` |
 | [BUG-014](#bug-014) | Low | Scan ignore list is case-sensitive | Before production | ✅ | `test_hardening.py::test_scan_ignore_list_ignores_case` |
@@ -47,6 +47,18 @@ Run every check with `cd backend && uv run pytest` (SQLite) and `uv run scripts/
 | [BUG-020](#bug-020) | Low | Compose header says `up -d --build` but nothing builds | Before production | ✅ | Comment only |
 | [BUG-021](#bug-021) | Medium | `-word` doesn't exclude other forms of the word | Before production | ✅ | `test_search.py::test_excluded_words_and_phrases` (PostgreSQL) |
 | [BUG-022](#bug-022) | Low | Mixed `/` and `\` in paths of local shares on Linux (CI red) | Now | ✅ | `test_api.py::test_display_paths_keep_the_share_separator` |
+| [BUG-023](#bug-023) | High | Text of a file stricter than its folder is shown to everyone who can read the folder | Before first real scan | ✅ | `test_search.py::test_file_stricter_than_its_folder_keeps_its_text_to_itself`, `::test_file_shared_in_a_folder_whose_files_are_closed` |
+| [BUG-024](#bug-024) | High | A file that crashes or hangs the extractor stops content indexing for good | Before first real scan | ✅ | `test_extract_process.py` (4 tests + 1 on Linux), `test_search.py::test_file_that_killed_the_worker_is_not_read_again` |
+| [BUG-025](#bug-025) | Medium | An edited name-only file (`.dwg`, `.zip`, …) is downloaded and marked "error" | Before first real scan | ✅ | `test_search.py::test_changed_name_only_file_is_not_read` |
+| [BUG-026](#bug-026) | Medium | An index round overruns its 20 minutes and can cancel the nightly scan | Before first real scan | ✅ | `test_search.py::test_index_round_stops_at_its_deadline` |
+| [BUG-027](#bug-027) | Low | Search slow on a big index (2–4 s for common words at 100k documents) | Before production | ✅ | `test_search.py::test_count_is_optional_and_capped`, `::test_name_matches_survive_when_too_many_documents_match` (PostgreSQL); `scripts/bench_search.py` |
+| [BUG-028](#bug-028) | Low | Download/preview errors replace the app with raw JSON | Before production | ✅ | `test_search.py::test_browser_gets_a_page_not_json_when_a_file_cant_be_opened`; CI smoke test |
+| [BUG-029](#bug-029) | Low | Sign-in form: no throttling (AD lockouts), `DOMAIN\user` rejected | Before production | 🟡 | `test_sso.py::test_repeated_wrong_passwords_stop_reaching_ad` and 2 more; values from IT |
+| [BUG-030](#bug-030) | Low | Renaming a share left the old name in the search index | Before production | ✅ | `test_search.py::test_renamed_share_is_found_by_its_new_name` |
+| [BUG-031](#bug-031) | Low | No Content-Security-Policy or HSTS | Before production | 🟡 | CI `.github/ci/smoke_test.sh` (✅ after its next green run) |
+| [BUG-032](#bug-032) | Low | Download keeps the SMB file open if the browser disconnects early | Before production | ✅ | `test_search.py::test_download_handle_is_closed_even_if_never_read` |
+| [BUG-033](#bug-033) | Medium | No privacy notice for sign-in data and the audit log (GDPR / LOPDGDD) | Before production | 🟡 | `test_privacy.py` (3 tests); company approval |
+| [BUG-034](#bug-034) | Medium | Google Fonts sends every user's IP address to Google | Before production | ✅ | CI `.github/ci/smoke_test.sh` ("index.html loads nothing from other sites") |
 
 ---
 
@@ -59,7 +71,8 @@ image runs uvicorn on 8000; Traefik routes to port 80, so every request would ge
 
 - **Fix:** `image: ghcr.io/jlleongarcia/corp-library-web:latest`.
 - **Files:** `docker-compose.yml`
-- **Status:** 🟡 Fixed in code. Confirm with the first deployment (images aren't published yet).
+- **Status:** ✅ Fixed. The CI smoke test starts `docker-compose.yml` as is and reaches the UI through
+  `web` (first green run on `7c58a7b`).
 
 ### BUG-002
 
@@ -186,7 +199,7 @@ the server-level ones: `location /` loses `X-Frame-Options`, `nosniff` and `Refe
 - **Fix:** the headers live in `frontend/security-headers.conf`, included by the server and every
   location. `X-Frame-Options` is now `SAMEORIGIN` (the document page frames PDF previews).
 - **Files:** `frontend/nginx.conf`, `frontend/security-headers.conf`, `frontend/Dockerfile`
-- **Status:** 🟡 Fixed in code; no Docker on the dev PC to run nginx. Confirm with `curl -I` on the server.
+- **Status:** ✅ Fixed. The CI smoke test checks the headers on every location (first green run on `7c58a7b`).
 
 ### BUG-012
 
@@ -298,6 +311,156 @@ saying "informes" and let it through.
 - **Fix:** `display_path` keeps `/` for POSIX share paths (`/...`, not `//server`); report tests
   compare with `os.sep`.
 - **Files:** `backend/app/services/reports.py`, `backend/tests/test_api.py`, `backend/tests/test_search.py`
+- **Status:** ✅ Fixed.
+
+### BUG-023
+
+**Text of a file stricter than its folder is shown to everyone who can read the folder.** Search, the
+document page and its 5,000-character text excerpt only checked the folder's permissions; only
+open/download re-read the file's own ACL. A sheet locked down inside a widely readable folder exposed
+its name and most of its text, and phase 3 would have handed that text to the assistant.
+
+- **Fix:** the content pass reads the file's security descriptor before its text (the file is being
+  opened anyway; if the ACL can't be read, the text isn't stored). A file with explicit ACEs or
+  inheritance disabled gets `files.acl_id` (migration `0004`): its explicit ACEs only, plus
+  `is_protected`. `access.file_access()` evaluates each (file ACL, folder ACL) pair as Windows does,
+  explicit ACEs first, then the folder's inheritable ones unless protected, and every query uses it
+  (search, share filter, browse, document page). A failed re-read keeps the last known ACL. Files
+  indexed by name only keep following their folder (their ACL isn't read: no file is opened for them);
+  open/download still check live. `.corplib-acl.json` gained per-file rules to test it.
+- **Files:** `backend/app/services/access.py`, `indexer.py`, `scanner.py` (`AclStore.file_acl_id`),
+  `search.py`, `library.py`, `devacl.py`, `backend/app/models.py`, `backend/alembic/versions/0004_file_acls_and_title_vectors.py`
+- **Status:** ✅ Fixed.
+
+### BUG-024
+
+**A file that crashes or hangs the extractor stops content indexing for good.** The content pass
+committed every 20 files and always started with the lowest pending id. A native crash in pdfium rolled
+the batch back and the next run picked the same file again; a hang blocked the worker forever.
+
+- **Fix:** extraction runs in a long-lived child process (`extract_process.py`); a crash, a run past
+  `EXTRACT_TIMEOUT_SECONDS` or (Linux) more memory than `EXTRACT_MEMORY_MB` fails that file only and the
+  child is replaced. Each file is marked `extracting` and committed before it is read; a file left that
+  way by a dead worker becomes `error` on the next run instead of being read again.
+- **Files:** `backend/app/services/extract_process.py`, `indexer.py`, `backend/app/config.py`
+- **Status:** ✅ Fixed. The memory limit test runs on Linux (CI) only.
+
+### BUG-025
+
+**An edited name-only file is downloaded and marked "error".** The scanner set every changed document
+back to `pending`, including types that are only indexed by name; the content pass then read up to
+50 MB of the file and failed ("not a valid Office file", "no extractor for .zip").
+
+- **Fix:** a changed file gets the status a new file would (`extract.initial_status`); the content pass
+  also refuses to read a type it can't extract.
+- **Files:** `backend/app/services/scanner.py`, `extract.py`, `indexer.py`
+- **Status:** ✅ Fixed.
+
+### BUG-026
+
+**An index round overruns its 20 minutes and can cancel the nightly scan.** The deadline was checked
+once per batch of 20 files; 20 scanned PDFs can take hours. A round running past `SCAN_HOUR` + 4 h
+skips that night's scan (BUG-008 by another route).
+
+- **Fix:** the deadline is checked after every file (each is committed on its own).
+- **Files:** `backend/app/services/indexer.py`
+- **Status:** ✅ Fixed.
+
+### BUG-027
+
+**Search was slow on a big index.** Measured with the new `scripts/bench_search.py` (200k files, 100k
+readable by the user): a common word sorted by relevance took 2.2 s, two common words 4.3 s, linear in
+the number of matches (ranking reads every match's vector), and every search counted all matches, the
+home page's "recently modified" list included.
+
+- **Fix:** the home page asks for no count (`count=false`); counts stop at 1,000 ("1,000+"; the UI shows
+  50 pages); the rank is only computed when it orders the results; with more than 1,000 matches,
+  relevance ranks the 1,000 newest whose name or folder matches (new `documents.title_vector`, small,
+  with its own index) plus the 1,000 newest matching anywhere. Now every benchmark query is under
+  350 ms (common word: 110 ms; two common words: 135 ms).
+- **Files:** `backend/app/services/search.py`, `indexer.py`, `backend/app/routers/library.py`,
+  `backend/app/schemas.py`, `backend/scripts/bench_search.py`, `frontend/src/pages/SearchPage.tsx`
+- **Status:** ✅ Fixed. Re-run the benchmark once the real index exists (real documents are longer).
+
+### BUG-028
+
+**Download/preview errors replace the app with raw JSON.** They are plain links, so a 403/404/503
+showed `{"detail": ...}` in the tab.
+
+- **Fix:** when the browser itself opens a download/preview link (`Sec-Fetch-Dest: document/iframe`),
+  errors come back as a short HTML page with a link back to the document (or to sign-in on 401). The
+  app's own requests still get JSON.
+- **Files:** `backend/app/routers/library.py`, `backend/app/main.py`, `.github/ci/smoke_test.sh`
+- **Status:** ✅ Fixed.
+
+### BUG-029
+
+**Sign-in form: no throttling, `DOMAIN\user` rejected.** Anyone could lock a colleague's AD account out
+by typing wrong passwords; `DOMAIN\alice` and `alice@domain` failed because `@LDAP_DOMAIN` was always
+appended.
+
+- **Fix:** after `LOGIN_MAX_FAILURES` (3) wrong passwords within `LOGIN_WINDOW_MINUTES` (30) the account
+  is refused with 429 *without asking AD*, so the app alone can't reach AD's lockout threshold
+  (recorded as `sign_in_failed` / `throttled`). `DOMAIN\alice` and `alice@<LDAP_DOMAIN>` sign in as `alice`.
+- **Files:** `backend/app/auth/throttle.py`, `backend/app/routers/auth.py`, `backend/app/config.py`
+- **Status:** 🟡 Fixed in code. Set the two values from the domain's lockout policy (ask IT).
+
+### BUG-030
+
+**Renaming a share left the old name in the search index** until each file changed.
+
+- **Fix:** a rename queues an `index` job with `rebuild_share`, which replaces only the path part
+  (weight B) of that share's vectors, folder by folder, without tokenising the text again.
+- **Files:** `backend/app/services/indexer.py`, `backend/app/routers/admin.py`, `backend/app/worker.py`
+- **Status:** ✅ Fixed.
+
+### BUG-031
+
+**No Content-Security-Policy or HSTS.** React escapes everything, so these are a second line of defence.
+
+- **Fix:** the UI gets a strict CSP (`'self'` only: no inline script, no other sites). Not on API
+  responses: a PDF preview served with it wouldn't render. HSTS (1 year, no subdomains) on everything.
+- **Files:** `frontend/nginx.conf`, `frontend/security-headers.conf`, `.github/ci/smoke_test.sh`
+- **Status:** 🟡 Fixed in code. ✅ after the smoke test's next green run.
+
+### BUG-032
+
+**Download kept the SMB file open if the browser disconnected before the first chunk.** The handle was
+closed by the generator, which never runs in that case.
+
+- **Fix:** `open_stream` also returns a close function, run by the response when it ends however it ends
+  (and if recording the audit event fails).
+- **Files:** `backend/app/services/library.py`, `backend/app/routers/library.py`
+- **Status:** ✅ Fixed.
+
+### BUG-033
+
+**No privacy notice.** Sign-ins, searches (with the words typed), views and downloads are logged with
+the user's name and IP for a year. In Spain, employees must be informed (GDPR arts. 13 and 14, LOPDGDD
+arts. 11 and 87, Estatuto de los Trabajadores art. 20.3).
+
+- **Fix:** first layer (LOPDGDD art. 11) at the bottom of every page and on the sign-in page; full notice
+  at `/privacy`, Spanish (authoritative) and English, public. Controller details come from `PRIVACY_*`
+  in `.env` (shown as `[pendiente: …]` until set; the api warns at startup), retention periods from the
+  settings the code applies. To make the notice true: reading the audit log is itself logged
+  (`audit_read`), and accounts unused for `AUDIT_RETENTION_DAYS` are deleted.
+- **Files:** `frontend/src/pages/PrivacyPage.tsx`, `frontend/src/components/privacy.tsx`,
+  `backend/app/routers/privacy.py`, `backend/app/services/audit.py`, `backend/app/routers/reports.py`,
+  `backend/app/worker.py`, `.env.example`
+- **Status:** 🟡 Fixed in code. The company must fill in the controller details, review the text, add
+  the processing to its record of processing activities (GDPR art. 30), assess whether a DPIA is
+  required, and inform the works council (ET art. 64.5; LOPDGDD art. 87.3).
+
+### BUG-034
+
+**Google Fonts sent every user's IP address to Google.** `index.html` loaded Inter from
+`fonts.googleapis.com`: personal data sent to a third party (in the US) on every page load, against the
+"nothing leaves the network" promise (cf. LG München I, 3 O 17493/20, 20 January 2022). It also failed
+on PCs without internet access.
+
+- **Fix:** the font is bundled (`@fontsource-variable/inter`); `index.html` references no other site,
+  which the smoke test checks.
+- **Files:** `frontend/index.html`, `frontend/src/main.tsx`, `frontend/tailwind.config.js`, `frontend/package.json`
 - **Status:** ✅ Fixed.
 
 ---

@@ -13,7 +13,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
-from ..auth import kerberos
+from ..auth import kerberos, throttle
 from ..auth.dev import dev_identity
 from ..auth.ldap_client import DirectoryUnavailable, authenticate_ldap, lookup_user
 from ..auth.sessions import CurrentUser, end_session, get_current_user, start_session
@@ -71,7 +71,8 @@ def sso(request: Request, response: Response, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=UserPublic)
 def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
-    username = payload.username.strip().lower()
+    # DOMAIN\alice and alice@domain work too (BUG-029).
+    username = throttle.normalize_username(payload.username)
     invalid = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     if settings.dev_mode:
@@ -81,13 +82,26 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
         who = dev_identity(username)
         method = "dev"
     else:
+        # Refused here, before AD sees another wrong password: the form must not be a
+        # way to lock a colleague's account (BUG-029).
+        if wait := throttle.blocked_for(username):
+            minutes = max(1, -(-int(wait.total_seconds()) // 60))
+            audit.record(db, "sign_in_failed", username, request, method="ldap", reason="throttled")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many failed sign-ins for this account. Try again in {minutes} minute"
+                       f"{'s' if minutes != 1 else ''}, or ask IT if you've forgotten your password.",
+                headers={"Retry-After": str(int(wait.total_seconds()) + 1)},
+            )
         try:
             who = authenticate_ldap(username, payload.password)
         except DirectoryUnavailable:
             raise HTTPException(status_code=503, detail=DIRECTORY_DOWN)
         if who is None:
+            throttle.record_failure(username)
             audit.record(db, "sign_in_failed", username, request, method="ldap")
             raise invalid
+        throttle.record_success(username)
         method = "ldap"
 
     # The account AD resolved, not the typed text, is the identity (and decides admin rights).

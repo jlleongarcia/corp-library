@@ -1,11 +1,13 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from sqlalchemy import text
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import dev_mode_problem, settings
 from .database import engine
-from .routers import admin, auth, library, reports
+from .routers import admin, auth, library, privacy, reports
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +32,18 @@ app.include_router(auth.router)
 app.include_router(library.router)
 app.include_router(admin.router)
 app.include_router(reports.router)
+app.include_router(privacy.router)
+
+if not settings.dev_mode and (missing := privacy.missing_settings()):
+    # Not fatal (the app works), but the privacy notice is incomplete without them (BUG-033).
+    logging.getLogger(__name__).warning("Privacy notice incomplete: set %s in .env.", ", ".join(missing))
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_errors(request: Request, exc: StarletteHTTPException):
+    # Download/preview links opened by the browser get a page, not JSON (BUG-028).
+    page = library.error_page(request, exc.status_code, exc.detail)
+    return page or await http_exception_handler(request, exc)
 
 
 @app.get("/health", tags=["system"])

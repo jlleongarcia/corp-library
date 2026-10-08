@@ -10,6 +10,7 @@ os.environ.update({
     "KERBEROS_KEYTAB": "",
     "COOKIE_SECURE": "false",  # the test client talks plain http
     "OCR_ENABLED": "false",  # tests that need OCR fake it
+    "EXTRACT_IN_CHILD": "false",  # test_extract_process.py covers the child process
     "SCAN_HOUR": "-1",
     "DEDUPE_MIN_SIZE": "1",
 })
@@ -38,9 +39,10 @@ def migrate(engine) -> None:
 @pytest.fixture(autouse=True)
 def _fresh_process_state():
     # Module-level caches outlive a test's database; ids are reused by the next one.
-    from app.auth import sessions
+    from app.auth import sessions, throttle
 
     sessions._refresh_failed_at.clear()
+    throttle.reset()
     yield
 
 

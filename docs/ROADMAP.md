@@ -1,6 +1,6 @@
 # Corp Library — Roadmap
 
-_Last updated: 2026-10-07 (phase 1 implemented; waiting on IT for SSO and real-user verification)_
+_Last updated: 2026-10-08 (phase 1 implemented and audited; waiting on IT for SSO and real-user verification)_
 
 Corp Library is an internal web app that helps our department (~15 people) find documents on the
 department shares and decide where new documents belong. It indexes the 5 top-level shares on the
@@ -140,6 +140,8 @@ _Goal: everyone uses it daily to find documents._
 - [x] Shared Traefik proxy (`traefik-proxy` project) routing `APP_HOST` to the app
 - [ ] Internal CA certificate installed in traefik-proxy
 - [ ] SSO tested on a domain PC; permission results checked against Explorer with 3 real users
+- [x] Privacy notice (first layer on every page, full notice at `/privacy`), BUG-033
+- [ ] Privacy notice completed and approved by the company (controller details, DPO, works council)
 
 **Exit:** all 15 users signed in by SSO; search results match what each person can open in Explorer
 (verified with at least 3 users with different access).
@@ -169,6 +171,22 @@ Notes from implementation:
   20-minute rounds that requeue themselves, so the first 2 TB pass never blocks a nightly scan.
 - **DEV_MODE** (BUG-017): password-less dev users with fake groups, refused unless LDAP is off and the
   database is local. `.corplib-acl.json` files fake folder permissions on local test shares.
+
+Phase 1 audit (2026-10-08, BUG-023 to BUG-034):
+- **Files with their own permissions** are now read when their text is extracted (`files.acl_id`: their
+  explicit ACEs, plus the folder's inheritable ones unless inheritance is disabled). Their name, text
+  and snippets follow those permissions. Files indexed by name only (no text to read) still follow
+  their folder; the live check on open/download covers them.
+- **Extraction runs in a child process** with a timeout and a memory limit; a file that breaks it fails
+  alone. The content pass commits file by file and checks its deadline after each one.
+- **Search speed** measured with `scripts/bench_search.py` (200k files, 100k readable): every query
+  under 350 ms. Matches are counted up to 1,000 ("1,000+", 50 pages); beyond that, relevance ranks the
+  1,000 newest name/folder matches plus the 1,000 newest matches anywhere, so a file *named* after a
+  common word still comes first.
+- **Privacy**: first-layer notice on every page and the sign-in page, full notice at `/privacy`
+  (LOPDGDD art. 11, GDPR arts. 13–14). Reading the audit log is itself audited; accounts unused for
+  `AUDIT_RETENTION_DAYS` are deleted. Nothing is loaded from other sites (fonts are bundled), and the UI
+  has a strict Content-Security-Policy.
 
 ### Phase 2 — Folder plan in the app
 
@@ -242,7 +260,8 @@ cites a document the asking user can't open.
 | Refactor moves thousands of files | Index churn, broken references | Incremental rescans by path + hash; treat moves as moves, not delete + add |
 | Single maintainer | Bus factor | Keep the stack small; deploy/restore documented in `docs/DEPLOYMENT.md` |
 | ACLs use local groups of the file server | Those SIDs can't be resolved via LDAP, so access can't be computed | Shown as "unresolved" in the reports; ask IT to use domain groups in the new structure |
-| A file has stricter permissions than its folder | It would be visible to everyone who can open the folder | Phase 1: re-check access on open/download; add file-level ACL scanning if needed |
+| A file has stricter permissions than its folder | It would be visible to everyone who can open the folder | Its own ACL is read with its text (BUG-023) and filters name, text and snippets; files indexed by name only follow their folder, and open/download always re-check live |
+| Employees not informed of the activity log | GDPR / LOPDGDD breach; works council objections | Privacy notice in the app (BUG-033); company to fill in controller details, update its record of processing, assess a DPIA and inform the works council before launch |
 
 ## Open questions
 

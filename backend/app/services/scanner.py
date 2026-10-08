@@ -19,9 +19,10 @@ from typing import Optional
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
-from ..acl.descriptor import parse_security_descriptor
+from ..acl.descriptor import SecurityDescriptor, parse_security_descriptor
 from ..config import settings
 from ..models import Acl, AclEntry, Document, File, Folder, ScanRun, Share
+from .extract import initial_status
 from .sources import DirEntry, FileSource, source_for
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,26 @@ class AclStore:
 
     def acl_id_for(self, sd_bytes: bytes) -> tuple[int, Optional[str]]:
         sd = parse_security_descriptor(sd_bytes)
+        return self._id(sd), sd.owner_sid
+
+    def file_acl_id(self, sd_bytes: bytes) -> Optional[int]:
+        """
+        A file's own permissions (BUG-023): its explicit ACEs, and whether it
+        still inherits from its folder. None when it only inherits, which is
+        the norm: the folder's ACL then decides.
+        """
+        sd = parse_security_descriptor(sd_bytes)
+        if not (sd.is_protected or sd.is_null_dacl or sd.has_explicit_aces):
+            return None
+        return self._id(SecurityDescriptor(
+            owner_sid=None,
+            # A NULL DACL grants everyone everything, whatever the folder says.
+            is_protected=sd.is_protected or sd.is_null_dacl,
+            is_null_dacl=sd.is_null_dacl,
+            aces=[a for a in sd.aces if not a.inherited],
+        ))
+
+    def _id(self, sd: SecurityDescriptor) -> int:
         key = sd.acl_hash()
         if key not in self.cache:
             acl_id = self.db.scalar(select(Acl.id).where(Acl.hash == key))
@@ -56,7 +77,7 @@ class AclStore:
                 self.db.flush()
                 acl_id = acl.id
             self.cache[key] = acl_id
-        return self.cache[key], sd.owner_sid
+        return self.cache[key]
 
 
 def _extension(name: str) -> str:
@@ -218,8 +239,12 @@ class ShareScanner:
                 row.size, row.mtime, row.ctime = e.size, e.mtime, e.ctime
                 row.quick_hash = row.content_hash = None
                 row.indexed_at = datetime.now(timezone.utc)
-                # Search keeps the old text until the index job has read the new one.
-                self.db.execute(update(Document).where(Document.file_id == row.id).values(status="pending"))
+                # Search keeps the old text until the index job has read the new one. Files
+                # indexed by name only stay that way: nothing to read (BUG-025).
+                self.db.execute(
+                    update(Document).where(Document.file_id == row.id)
+                    .values(status=initial_status(row.extension, e.size))
+                )
                 self.run.files_updated += 1
         if existing:
             self.db.execute(delete(File).where(File.id.in_([f.id for f in existing.values()])))

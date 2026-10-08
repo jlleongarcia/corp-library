@@ -7,6 +7,21 @@ export interface User {
   is_admin: boolean
 }
 
+/** The facts the privacy notice quotes (GET /privacy). */
+export interface PrivacyInfo {
+  controller: string
+  controller_id: string
+  controller_address: string
+  contact: string
+  dpo: string
+  audit_retention_days: number
+  backup_keep_days: number
+  session_days: number
+  groups_refresh_hours: number
+  /** .env settings still empty: the notice shows them as pending */
+  missing: string[]
+}
+
 export interface AuthConfig {
   app_name: string
   sso_enabled: boolean
@@ -35,7 +50,10 @@ export interface SearchResult {
 }
 
 export interface SearchResponse {
-  total: number
+  /** null when not asked for (count=false); at most 1,000, see total_capped */
+  total: number | null
+  /** more matches than `total` */
+  total_capped: boolean
   results: SearchResult[]
 }
 
@@ -66,7 +84,7 @@ export interface BrowseResponse {
 }
 
 export type IndexStatus =
-  | 'pending' | 'text' | 'ocr' | 'empty' | 'metadata' | 'too_large' | 'ocr_unavailable' | 'error'
+  | 'pending' | 'extracting' | 'text' | 'ocr' | 'empty' | 'metadata' | 'too_large' | 'ocr_unavailable' | 'error'
 
 export interface DocumentDetail {
   file_id: number
@@ -93,6 +111,7 @@ export interface AuditEvent {
   at: string
   username: string | null
   action: 'sign_in' | 'sign_in_failed' | 'sign_out' | 'search' | 'view' | 'preview' | 'download' | 'denied'
+    | 'audit_read'
   file_id: number | null
   path: string | null
   detail: Record<string, unknown>

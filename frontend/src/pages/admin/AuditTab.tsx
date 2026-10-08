@@ -18,6 +18,7 @@ const ACTIONS: { key: AuditEvent['action']; label: string }[] = [
   { key: 'sign_in', label: 'Sign-ins' },
   { key: 'sign_in_failed', label: 'Failed sign-ins' },
   { key: 'sign_out', label: 'Sign-outs' },
+  { key: 'audit_read', label: 'Audit log queries' },
 ]
 
 const VARIANT: Partial<Record<AuditEvent['action'], 'default' | 'green' | 'red' | 'gray'>> = {

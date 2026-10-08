@@ -89,3 +89,49 @@ def test_password_form_is_the_fallback(client, sso, monkeypatch):
 
 def test_sso_off_when_no_keytab(client):
     assert client.get("/auth/sso").status_code == 404
+
+
+# ── BUG-029: the sign-in form must not lock AD accounts ───────────────────────
+
+@pytest.fixture
+def ldap_form(client, monkeypatch):
+    monkeypatch.setattr(settings, "dev_mode", False)
+    monkeypatch.setattr(settings, "ldap_domain", "company.com")
+    monkeypatch.setattr(settings, "login_max_failures", 3)
+    calls = []
+
+    def authenticate(username, password):
+        calls.append(username)
+        return ALICE if (username, password) == ("alice", "right") else None
+
+    monkeypatch.setattr(auth_router, "authenticate_ldap", authenticate)
+    return calls
+
+
+def test_repeated_wrong_passwords_stop_reaching_ad(client, db, ldap_form):
+    for _ in range(3):
+        assert client.post("/auth/login", json={"username": "alice", "password": "x"}).status_code == 401
+    r = client.post("/auth/login", json={"username": "ALICE", "password": "right"})
+    assert r.status_code == 429 and "Too many failed sign-ins" in r.json()["detail"]
+    assert int(r.headers["retry-after"]) > 0
+    assert len(ldap_form) == 3  # AD only saw the first three
+    assert db.scalar(select(AuditEvent).where(AuditEvent.detail["reason"].as_string() == "throttled")) is not None
+    # Other accounts are unaffected.
+    assert client.post("/auth/login", json={"username": "bob", "password": "x"}).status_code == 401
+
+
+def test_throttle_window_expires(client, ldap_form, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from app.auth import throttle
+
+    long_ago = datetime.now(timezone.utc) - timedelta(minutes=settings.login_window_minutes + 1)
+    for _ in range(3):
+        throttle.record_failure("alice", now=long_ago)
+    assert client.post("/auth/login", json={"username": "alice", "password": "right"}).status_code == 200
+
+
+@pytest.mark.parametrize("typed", ["alice", r"COMPANY\alice", "alice@company.com", " Alice@COMPANY.COM "])
+def test_domain_forms_of_the_username_are_accepted(client, ldap_form, typed):
+    r = client.post("/auth/login", json={"username": typed, "password": "right"})
+    assert r.status_code == 200 and ldap_form == ["alice"]

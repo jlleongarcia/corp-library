@@ -42,7 +42,7 @@ if it ever becomes private, run once on the server
 ```bash
 git clone https://github.com/jlleongarcia/corp-library.git && cd corp-library
 cp .env.example .env
-nano .env        # set APP_HOST, POSTGRES_PASSWORD, ADMIN_USERS, LDAP_*, SMB_*
+nano .env        # set APP_HOST, POSTGRES_PASSWORD, ADMIN_USERS, LDAP_*, SMB_*, PRIVACY_*, LOGIN_*
 mkdir -p certs && cp /path/to/internal-ca.pem certs/   # CA that signed the DCs' LDAPS certificates
 mkdir -p secrets  # the Kerberos keytab goes here once IT provides it (see below)
 docker compose pull
@@ -62,6 +62,20 @@ Then open `https://<APP_HOST>/`, sign in with your Windows account (you must be 
    held up, and search improves as it goes. Progress: **Scan activity → Search index**.
 
 From then on everything runs nightly at `SCAN_HOUR` (default 02:00).
+
+### Before people use it
+
+- **Privacy notice.** Fill in `PRIVACY_CONTROLLER`, `PRIVACY_CONTROLLER_ID`, `PRIVACY_CONTROLLER_ADDRESS`
+  and `PRIVACY_CONTACT` (and `PRIVACY_DPO` if there is one) with whoever handles data protection. Until
+  then the notice at the bottom of every page shows `[pendiente: …]` and the api logs a warning at
+  startup. The text itself is in `frontend/src/pages/PrivacyPage.tsx`; it describes what the app
+  actually logs and for how long (`AUDIT_RETENTION_DAYS`, `SESSION_DAYS`, `BACKUP_KEEP_DAYS`), so
+  review it with them as well.
+- **Sign-in throttling.** Ask IT for the domain's account lockout policy and set `LOGIN_MAX_FAILURES`
+  below its threshold and `LOGIN_WINDOW_MINUTES` at or above its reset time.
+- **HTTPS only.** nginx sends `Strict-Transport-Security` (1 year): once a browser has visited over HTTPS
+  it won't accept plain HTTP or click through a certificate warning for `APP_HOST`. Install the internal
+  CA certificate in traefik-proxy first.
 
 ### Single sign-on (Kerberos)
 
@@ -167,6 +181,9 @@ docker compose start api worker
 | SSO or sign-in says "Active Directory can't be reached" | The `LDAP_BIND_DN` account can't log in or can't read `tokenGroups`, or the DCs are unreachable |
 | Downloads fail with "can't be reached to check your access" | The api container can't reach the file server over SMB (opening a file re-checks its permissions live) |
 | Scanned PDFs are found by name only | `OCR_ENABLED=false`, or they were indexed before OCR was available: **Scan activity → Index now (retry failed)** |
+| Some documents are "Unreadable" with "crashed the text extractor", "took more than … s" or "worker stopped while reading" | That file broke or overloaded the PDF/Office reader; the rest were indexed. Usually a damaged file. Raise `EXTRACT_TIMEOUT_SECONDS` / `EXTRACT_MEMORY_MB` if many big scans fail this way, then **Index now (retry failed)** |
+| Sign-in says "Too many failed sign-ins for this account" | `LOGIN_MAX_FAILURES` wrong passwords within `LOGIN_WINDOW_MINUTES`: wait, or restart the api to clear it (the person's AD account isn't locked by this) |
+| Privacy notice shows `[pendiente: …]` | The `PRIVACY_*` settings in `.env` are empty |
 | Every LDAP sign-in fails; log mentions certificate / `invalid CA public key file` | `certs/internal-ca.pem` missing, or `LDAP_SERVER` isn't the name on the DC's certificate (use the FQDN, not an IP) |
 | Scan fails immediately with a logon error | `SMB_USERNAME`/`SMB_PASSWORD` wrong, or account locked/expired |
 | Folders show "ACL unreadable" | The scanner account lacks *Read permissions* on that folder |

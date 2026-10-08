@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     # The session cookie is only sent over HTTPS. Turn off only for local development.
     cookie_secure: bool = True
 
+    # Sign-in form throttling: after this many wrong passwords within the window, the
+    # account is refused without asking AD, so the app can't trigger an AD lockout.
+    # Keep it below the domain's lockout threshold; 0 disables it.
+    login_max_failures: int = 3
+    login_window_minutes: int = 30  # >= the domain's "reset lockout counter after"
+
     # ── Kerberos SSO ──────────────────────────────────────────────────────────
     # Keytab for HTTP/<APP_HOST>, from IT. Empty = SSO off; the sign-in form still works.
     kerberos_keytab: str = ""
@@ -78,9 +84,26 @@ class Settings(BaseSettings):
     tesseract_cmd: str = "tesseract"
     # A long extraction job hands the worker back after this long, so scans aren't held up.
     extract_job_minutes: int = 20
+    # Extraction runs in a child process (BUG-024): a file that crashes it, takes longer
+    # than this, or needs more memory than this (Linux only) fails alone.
+    extract_in_child: bool = True
+    extract_timeout_seconds: int = 900  # OCR of a 30-page scan fits comfortably
+    extract_memory_mb: int = 2048
 
     # ── Audit log ─────────────────────────────────────────────────────────────
-    audit_retention_days: int = 365  # 0 keeps everything
+    # Also how long an account unused since its last sign-in is kept. The privacy
+    # notice states it: change it there too if the company decides otherwise.
+    audit_retention_days: int = 365  # 0 keeps everything (not compatible with the GDPR)
+    backup_keep_days: int = 14  # the backup container's setting, quoted by the privacy notice
+
+    # ── Privacy notice (BUG-033) ──────────────────────────────────────────────
+    # Shown at the bottom of every page and in full at /privacy. GDPR art. 13 requires
+    # the controller's identity and contact details: fill these in before going live.
+    privacy_controller: str = ""  # the employer's legal name, e.g. "Ejemplo Ingeniería, S.L."
+    privacy_controller_id: str = ""  # NIF
+    privacy_controller_address: str = ""  # registered address
+    privacy_contact: str = ""  # where people exercise their rights (email or postal address)
+    privacy_dpo: str = ""  # Data Protection Officer's contact, if one is designated
 
     # ── Duplicate detection ───────────────────────────────────────────────────
     dedupe_min_size: int = 1024  # bytes; tiny files aren't worth reporting

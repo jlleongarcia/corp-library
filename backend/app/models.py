@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import (
-    JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text,
+    JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
@@ -116,6 +116,9 @@ class File(Base):
     __table_args__ = (
         UniqueConstraint("folder_id", "name", name="uq_files_folder_name"),
         Index("ix_files_size_hash", "size", "quick_hash"),
+        # Few files have their own permissions; every permission check lists them.
+        Index("ix_files_acl_id", "acl_id", postgresql_where=text("acl_id IS NOT NULL"),
+              sqlite_where=text("acl_id IS NOT NULL")),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -130,6 +133,11 @@ class File(Base):
     quick_hash: Mapped[Optional[str]] = mapped_column(String(64))
     content_hash: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # The file's own permissions, when it has explicit ACEs or blocks inheritance
+    # (BUG-023): its explicit ACEs only, plus `is_protected`; the folder's inheritable
+    # ACEs still apply unless protected. Read when the content is extracted; NULL = the
+    # file only inherits (or hasn't been read yet), so its folder decides.
+    acl_id: Mapped[Optional[int]] = mapped_column(ForeignKey("acls.id"))
 
     folder: Mapped[Folder] = relationship()
 
@@ -212,7 +220,10 @@ class Document(Base):
     """
 
     __tablename__ = "documents"
-    __table_args__ = (Index("ix_documents_search_vector", "search_vector", postgresql_using="gin"),)
+    __table_args__ = (
+        Index("ix_documents_search_vector", "search_vector", postgresql_using="gin"),
+        Index("ix_documents_title_vector", "title_vector", postgresql_using="gin"),
+    )
 
     file_id: Mapped[int] = mapped_column(ForeignKey("files.id", ondelete="CASCADE"), primary_key=True)
     # pending | text | ocr | empty | metadata | too_large | ocr_unavailable | error
@@ -221,6 +232,9 @@ class Document(Base):
     error: Mapped[Optional[str]] = mapped_column(String(500))
     extracted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     search_vector: Mapped[Optional[str]] = mapped_column(SearchVector)
+    # Name and path only (weights A and B): small, so search can find name matches
+    # among many content matches without reading every document's vector (BUG-027).
+    title_vector: Mapped[Optional[str]] = mapped_column(SearchVector)
 
     file: Mapped[File] = relationship()
 

@@ -37,10 +37,12 @@ def create_share(body: ShareCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/shares/{share_id}", response_model=SharePublic)
-def update_share(share_id: int, body: ShareUpdate, db: Session = Depends(get_db)):
+def update_share(share_id: int, body: ShareUpdate, db: Session = Depends(get_db),
+                 user: CurrentUser = Depends(require_admin)):
     share = db.get(Share, share_id)
     if share is None:
         raise HTTPException(status_code=404, detail="Share not found")
+    old_name = share.name
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(share, field, value.strip() if isinstance(value, str) else value)
     try:
@@ -48,6 +50,9 @@ def update_share(share_id: int, body: ShareUpdate, db: Session = Depends(get_db)
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="A share with that name already exists")
+    if share.name != old_name:
+        # The share's name is part of every document's searchable path (BUG-030).
+        jobs.enqueue(db, jobs.INDEX, {"rebuild_share": share.id}, requested_by=user.username)
     return share
 
 

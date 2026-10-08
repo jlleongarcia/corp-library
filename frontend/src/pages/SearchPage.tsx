@@ -10,6 +10,8 @@ import { CopyPathButton, FileTypeBadge, Snippet } from '../components/library'
 import { ErrorNote } from './admin/common'
 
 const PAGE_SIZE = 20
+// The API counts and ranks up to 1,000 matches (BUG-027): narrower searches beat page 51.
+const MAX_PAGES = 50
 const FILTER_KEYS = ['share', 'type', 'from', 'to'] as const
 
 const selectClass =
@@ -45,6 +47,7 @@ export default function SearchPage() {
           sort: searching ? sort : 'newest',
           limit: searching ? PAGE_SIZE : 10,
           offset: (page - 1) * PAGE_SIZE,
+          count: searching, // the recently-modified list shows no total
         },
       }).then((r) => r.data),
     placeholderData: keepPreviousData,
@@ -67,7 +70,8 @@ export default function SearchPage() {
   }
 
   const total = results.data?.total ?? 0
-  const pages = Math.ceil(total / PAGE_SIZE)
+  const capped = results.data?.total_capped ?? false
+  const pages = Math.min(MAX_PAGES, Math.ceil(total / PAGE_SIZE))
 
   return (
     <div className="space-y-5">
@@ -165,7 +169,8 @@ export default function SearchPage() {
       ) : (
         <div className="space-y-3">
           <p className="text-sm text-gray-500">
-            {total.toLocaleString('en-GB')} document{total === 1 ? '' : 's'}
+            {total.toLocaleString('en-GB')}{capped && '+'} document{total === 1 && !capped ? '' : 's'}
+            {capped && ' (showing the most relevant; add words or filters to narrow it down)'}
             {results.isFetching && <Spinner className="w-3.5 h-3.5 ml-2 align-middle" />}
           </p>
           <ul className="space-y-3">

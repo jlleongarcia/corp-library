@@ -5,9 +5,12 @@ import SearchPage from './pages/SearchPage'
 import BrowsePage from './pages/BrowsePage'
 import DocumentPage from './pages/DocumentPage'
 import AdminPage from './pages/admin/AdminPage'
+import PrivacyPage from './pages/PrivacyPage'
 
 const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
+  // Public: the privacy notice must be readable before signing in.
+  { path: '/privacy', element: <PrivacyPage /> },
   {
     element: <AppLayout />,
     children: [

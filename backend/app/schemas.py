@@ -108,7 +108,8 @@ class SearchResult(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    total: int
+    total: Optional[int]  # None when not asked for (count=false)
+    total_capped: bool = False  # more than `total` matches (search.COUNT_CAP)
     results: list[SearchResult]
 
 
@@ -182,6 +183,21 @@ class DocumentDetail(BaseModel):
     preview: Optional[str]  # pdf | image: can be shown inline
     text_excerpt: Optional[str]
     text_truncated: bool
+
+
+# ── Privacy notice ────────────────────────────────────────────────────────────
+
+class PrivacyInfo(BaseModel):
+    controller: str
+    controller_id: str
+    controller_address: str
+    contact: str
+    dpo: str
+    audit_retention_days: int
+    backup_keep_days: int
+    session_days: int
+    groups_refresh_hours: int
+    missing: list[str]  # settings still to fill in before going live
 
 
 # ── Audit ─────────────────────────────────────────────────────────────────────

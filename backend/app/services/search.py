@@ -14,11 +14,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal, Optional
 
-from sqlalchemy import func, literal, literal_column, select
+from sqlalchemy import func, literal, literal_column, select, union
 from sqlalchemy.orm import Session
 
 from ..models import Document, File, Folder, Share
-from .access import readable_file_acl_ids
+from .access import file_access
 from .reports import display_path
 from .text import parse_query, snippet
 
@@ -38,6 +38,13 @@ TYPE_GROUPS: dict[str, tuple[str, list[str]]] = {
 KNOWN_EXTENSIONS = [e for _, exts in TYPE_GROUPS.values() for e in exts]
 
 Sort = Literal["relevance", "newest", "name"]
+# Counting and ranking read every match's vector, which for a common word in a
+# 2 TB index takes seconds (BUG-027, scripts/bench_search.py). So matches are
+# counted up to COUNT_CAP (the UI says "1,000+" and shows at most 50 pages of
+# 20), and when there are more, relevance ranks only the likeliest: the
+# COUNT_CAP newest whose name or folder matches, plus the COUNT_CAP newest
+# matching anywhere. Up to COUNT_CAP matches, every one is ranked.
+COUNT_CAP = 1_000
 
 
 @dataclass
@@ -50,6 +57,7 @@ class SearchParams:
     sort: Sort = "relevance"
     limit: int = 20
     offset: int = 0
+    count: bool = True  # the home page's "recently modified" list shows no total
 
 
 def file_path(share: Share, folder_path: str, name: str) -> str:
@@ -71,8 +79,17 @@ def _matches(q: str, parse=func.websearch_to_tsquery):
     return func.coalesce(Document.search_vector.op("@@")(_tsquery(q, parse)), False)
 
 
+def _rank_candidates(stmt, tsq, newest):
+    """Too many matches to rank them all: narrow them to the likeliest ones (BUG-027)."""
+    ids = stmt.with_only_columns(File.id)
+    by_name = ids.where(Document.title_vector.op("@@")(tsq)).order_by(*newest).limit(COUNT_CAP)
+    recent = ids.order_by(*newest).limit(COUNT_CAP)
+    candidates = union(by_name, recent).subquery()
+    return stmt.where(File.id.in_(select(candidates.c.id)))
+
+
 def search(db: Session, token: frozenset[str], p: SearchParams) -> dict:
-    readable = readable_file_acl_ids(db, token)
+    access = file_access(db, token)
     parsed = parse_query(p.q)
     sqlite = db.get_bind().dialect.name == "sqlite"
 
@@ -81,7 +98,7 @@ def search(db: Session, token: frozenset[str], p: SearchParams) -> dict:
         .join(Folder, File.folder_id == Folder.id)
         .join(Share, File.share_id == Share.id)
         .outerjoin(Document, Document.file_id == File.id)
-        .where(Folder.acl_id.in_(readable), Share.enabled)
+        .where(access.clause(), Share.enabled)
     )
     rank = literal(0)
     if parsed.terms or parsed.excluded:
@@ -95,7 +112,9 @@ def search(db: Session, token: frozenset[str], p: SearchParams) -> dict:
             if parsed.terms:
                 tsq = _tsquery(parsed.text)
                 stmt = stmt.where(Document.search_vector.op("@@")(tsq))
-                rank = func.ts_rank_cd(Document.search_vector, tsq)
+                if p.sort == "relevance":
+                    # Only when it orders the results: it reads every match's whole vector.
+                    rank = func.ts_rank_cd(Document.search_vector, tsq)
             # Each exclusion is matched as typed and stemmed in both languages, and
             # any match rejects the document. (Left inside the OR-ed query above, a
             # stemming that didn't notice the word would let the document through.)
@@ -112,9 +131,14 @@ def search(db: Session, token: frozenset[str], p: SearchParams) -> dict:
     if p.modified_to:
         stmt = stmt.where(File.mtime < datetime.combine(p.modified_to + timedelta(days=1), time.min, timezone.utc))
 
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    ranked = p.sort == "relevance" and parsed.terms and not sqlite
+    found = None
+    if p.count or ranked:
+        found = db.scalar(select(func.count()).select_from(stmt.with_only_columns(File.id).limit(COUNT_CAP + 1).subquery())) or 0
 
     newest = (File.mtime.desc().nulls_last(), File.id)
+    if ranked and found > COUNT_CAP:
+        stmt = _rank_candidates(stmt, tsq, newest)
     if p.sort == "name":
         order = (func.lower(File.name), File.id)
     elif p.sort == "newest" or not parsed.terms:
@@ -128,7 +152,8 @@ def search(db: Session, token: frozenset[str], p: SearchParams) -> dict:
     ).all()) if rows and parsed.terms else {}
 
     return {
-        "total": total,
+        "total": min(found, COUNT_CAP) if p.count else None,
+        "total_capped": bool(p.count and found > COUNT_CAP),
         "results": [
             {
                 "file_id": f.id,
@@ -153,12 +178,13 @@ def file_types() -> list[dict]:
 
 
 def visible_shares(db: Session, token: frozenset[str]) -> list[Share]:
-    """Shares with at least one folder whose files this user can open (for the share filter)."""
-    readable = readable_file_acl_ids(db, token)
+    """Shares with at least one file this user can open (for the share filter)."""
+    access = file_access(db, token)
+    folder_level = select(Folder.id).where(
+        Folder.share_id == Share.id, Folder.acl_id.in_(access.folder_acl_ids)
+    ).exists()
     return list(db.scalars(
-        select(Share).where(
-            Share.enabled,
-            select(Folder.id).where(Folder.share_id == Share.id, Folder.acl_id.in_(readable)).exists(),
-        ).order_by(Share.name)
+        select(Share).where(Share.enabled, folder_level | Share.id.in_(access.file_pair_shares))
+        .order_by(Share.name)
     ))
 

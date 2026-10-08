@@ -21,8 +21,10 @@ Everyone signs in with their Windows account (Kerberos single sign-on, or the si
   it in place from Explorer
 
 Each person only sees what Windows lets them open: results are filtered by their AD groups against the
-file server's permissions, and every download re-checks the file's live permissions. Searches, views
-and downloads go to an audit log. Admins see no more documents than anyone else.
+file server's permissions (including files with permissions of their own), and every download
+re-checks the file's live permissions. Searches, views and downloads go to an audit log, which the
+privacy notice at the bottom of every page (in full at `/privacy`, Spanish and English) explains to
+users. Admins see no more documents than anyone else.
 
 The admin console (from phase 0) shows:
 
@@ -116,12 +118,23 @@ them list this folder only, without opening its files. Names are usernames or gr
 `DEV_GROUPS`. Sign in as different users to compare what each one finds. Rescan after editing these
 files. Downloads re-check them immediately, as they would the real file server.
 
+A file can have permissions of its own, like a file whose inheritance was disabled in Explorer. They
+go in the ACL file of its folder and replace the folder's, unless `"inherit": true` adds them on top:
+
+```json
+{"files": {"salaries.xlsx": {"read": ["hr"]}, "minutes.docx": {"deny": ["bob"], "inherit": true}}}
+```
+
+An ACL file with only `"files"` leaves the folder's own permissions alone. A file's own permissions are
+read when its text is indexed, so run the index job (or rescan) after changing them.
+
 **Tests:**
 
 ```bash
 cd backend
 uv run pytest                          # fast, on SQLite
 uv run scripts/pytest_postgres.py      # same suite on a real PostgreSQL
+uv run scripts/bench_search.py --files 200000   # search speed on a synthetic corpus (~4 min to build)
 ```
 
 **Dependencies:** `uv add <package>` (or `uv add --dev <package>`) updates `pyproject.toml` and

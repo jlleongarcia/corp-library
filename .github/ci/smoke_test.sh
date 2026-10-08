@@ -45,7 +45,8 @@ expect_headers() {  # url header...
   done
 }
 
-SECURITY=("X-Content-Type-Options: nosniff" "X-Frame-Options: SAMEORIGIN" "Referrer-Policy: same-origin")
+SECURITY=("X-Content-Type-Options: nosniff" "X-Frame-Options: SAMEORIGIN" "Referrer-Policy: same-origin"
+          "Strict-Transport-Security: max-age=31536000")
 
 # API reachable through nginx, with the /api prefix stripped.
 expect_status 200 "$BASE/api/health"
@@ -66,6 +67,18 @@ expect_headers "$BASE/search" "${SECURITY[@]}" "Cache-Control: no-cache"  # SPA 
 expect_headers "$BASE$asset" "${SECURITY[@]}" "Cache-Control: public, immutable"
 expect_headers "$BASE/api/health" "${SECURITY[@]}"
 expect_headers "$BASE/api/documents/1/download" "${SECURITY[@]}"
+
+# CSP on the UI only (BUG-031): a PDF preview served with it wouldn't render.
+headers "$BASE/" | grep -qi "^Content-Security-Policy: default-src 'self'; script-src 'self';" \
+  && pass "UI has the Content-Security-Policy" || fail "UI lacks the Content-Security-Policy"
+headers "$BASE/api/documents/1/preview" | grep -qi "^Content-Security-Policy:" \
+  && fail "API responses must not carry the UI's CSP" || pass "API responses have no CSP"
+# Nothing loaded from other sites (BUG-034).
+curl -fsS "$BASE/" | grep -qiE "https?://" \
+  && fail "index.html references another site" || pass "index.html loads nothing from other sites"
+# A download link opened by the browser gets a page, not JSON (BUG-028).
+curl -s -m 30 -H "Sec-Fetch-Dest: document" "$BASE/api/documents/1/download" | grep -q 'href="/login"' \
+  && pass "download link without a session: sign-in page" || fail "download link without a session"
 
 # Nothing crashed and restarted behind --wait's back (the worker has no healthcheck).
 sleep 10

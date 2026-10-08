@@ -6,17 +6,25 @@ has a few hundred distinct ACLs at most. Every query that returns files asks
 "which of those ACLs let this token open files?" (evaluated here in Python, with
 Windows' rules) and filters on `folders.acl_id IN (...)`. A folder without a
 readable ACL matches nothing: fail closed.
+
+A few files have permissions of their own (explicit ACEs, or inheritance
+disabled: BUG-023). Those are evaluated per (file ACL, folder ACL) pair, as
+Windows would: the file's explicit ACEs first, then what it inherits from the
+folder unless inheritance is disabled.
 """
 
 import threading
+from collections import defaultdict
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import ColumnElement
 
-from ..acl.evaluate import BASELINE_SIDS, InheritedAce, can_read, can_read_files
+from ..acl.evaluate import BASELINE_SIDS, InheritedAce, can_read, can_read_files, file_aces
 from ..config import settings
-from ..models import Acl, AclEntry, Folder, GroupMember
+from ..models import Acl, AclEntry, File, Folder, GroupMember
 
 
 def baseline_sids_for(user_sid: str) -> set[str]:
@@ -54,9 +62,11 @@ class AclCache:
         self._lock = threading.Lock()
         self._hashes: dict[int, str] = {}
         self._entries: dict[int, list[InheritedAce]] = {}
+        self._protected: frozenset[int] = frozenset()
 
     def get(self, db: Session) -> dict[int, list[InheritedAce]]:
-        current = dict(db.execute(select(Acl.id, Acl.hash)).all())
+        rows = db.execute(select(Acl.id, Acl.hash, Acl.is_protected)).all()
+        current = {i: h for i, h, _ in rows}
         with self._lock:
             stale = [i for i, h in current.items() if self._hashes.get(i) != h]
             if stale or len(current) != len(self._hashes):
@@ -69,25 +79,65 @@ class AclCache:
                     entries[acl_id].append(InheritedAce(sid, ace_type, mask, flags))
                 self._entries = {i: self._entries[i] for i in current if i not in entries} | entries
                 self._hashes = current
+                self._protected = frozenset(i for i, _, p in rows if p)
             return self._entries
+
+    def is_protected(self, acl_id: int) -> bool:
+        return acl_id in self._protected
 
 
 acl_cache = AclCache()
 
 
-def readable_file_acl_ids(db: Session, token: set[str] | frozenset[str]) -> list[int]:
-    """ACLs whose folders hold files this token can open (the folder's inheritable ACEs: BUG-007)."""
-    return [i for i, aces in acl_cache.get(db).items() if can_read_files(aces, token)]
+@dataclass
+class FileAccess:
+    """Which files one token may open: the answer to every "can they see this file?"."""
+
+    # Folders whose (inheriting) files this token can open.
+    folder_acl_ids: set[int]
+    # For files with their own permissions: file ACL id -> folder ACL ids it can be opened in.
+    file_pairs: dict[int, set[int]] = field(default_factory=dict)
+    # Shares holding at least one such file.
+    file_pair_shares: set[int] = field(default_factory=set)
+
+    def can_open(self, file_acl_id: int | None, folder_acl_id: int | None) -> bool:
+        if file_acl_id is None:
+            return folder_acl_id in self.folder_acl_ids
+        return folder_acl_id in self.file_pairs.get(file_acl_id, ())
+
+    def clause(self) -> ColumnElement[bool]:
+        """SQL condition on File and Folder (both must be in the query)."""
+        inheriting = and_(File.acl_id.is_(None), Folder.acl_id.in_(self.folder_acl_ids))
+        own = [and_(File.acl_id == f, Folder.acl_id.in_(folders)) for f, folders in self.file_pairs.items()]
+        return or_(inheriting, *own) if own else inheriting
+
+
+def file_access(db: Session, token: set[str] | frozenset[str]) -> FileAccess:
+    acls = acl_cache.get(db)
+    access = FileAccess({i for i, aces in acls.items() if can_read_files(aces, token)})
+    # Distinct (file ACL, folder ACL) pairs: few, and served by the partial index on files.acl_id.
+    pairs = db.execute(
+        select(File.acl_id, Folder.acl_id, File.share_id).distinct()
+        .join(Folder, File.folder_id == Folder.id)
+        .where(File.acl_id.is_not(None))
+    ).all()
+    readable: dict[int, set[int]] = defaultdict(set)
+    for file_acl, folder_acl, share_id in pairs:
+        if folder_acl is None:
+            continue  # its folder's permissions are unknown: like every file there, hidden
+        own = acls.get(file_acl, [])
+        if acl_cache.is_protected(file_acl):
+            aces = own
+        else:
+            # Windows' order: the file's explicit ACEs, then the inherited ones.
+            aces = [*own, *file_aces(acls.get(folder_acl, []))]
+        if can_read(aces, token):
+            readable[file_acl].add(folder_acl)
+            access.file_pair_shares.add(share_id)
+    access.file_pairs = dict(readable)
+    return access
 
 
 def listable_folder_acl_ids(db: Session, token: set[str] | frozenset[str]) -> list[int]:
     """ACLs whose folders this token can list (the folder's own ACEs)."""
     return [i for i, aces in acl_cache.get(db).items() if can_read(aces, token)]
-
-
-def can_open_files_in(db: Session, folder: Folder, token: set[str] | frozenset[str]) -> bool:
-    return folder.acl_id is not None and folder.acl_id in set(readable_file_acl_ids(db, token))
-
-
-def can_list(db: Session, folder: Folder, token: set[str] | frozenset[str]) -> bool:
-    return folder.acl_id is not None and folder.acl_id in set(listable_folder_acl_ids(db, token))

@@ -4,6 +4,7 @@ import { BookOpen, Lock, Monitor } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { errorMessage } from '../lib/api'
 import { Button, Spinner } from '../components/ui'
+import { PrivacyFooter } from '../components/privacy'
 
 const inputClass =
   'w-full px-4 py-2.5 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 ' +
@@ -117,6 +118,8 @@ export default function LoginPage() {
         <p className="mt-6 text-center text-xs text-gray-400">
           Use your Windows (Active Directory) account · Contact IT for access issues
         </p>
+        {/* Data is collected from the sign-in on: the first layer of information goes here (GDPR art. 13). */}
+        <PrivacyFooter className="mt-4 text-center" />
       </div>
     </div>
   )

@@ -16,7 +16,7 @@ from sqlalchemy import delete, select
 
 from .config import settings
 from .database import SessionLocal
-from .models import AuthSession, Job, Share
+from .models import AuthSession, Job, Share, User
 from .services import audit, jobs
 from .services.dedupe import run_dedupe
 from .services.directory import open_directory, resolve_principals
@@ -65,7 +65,8 @@ def run_job(db, job: Job) -> None:
                 directory.close()
     elif job.kind == jobs.INDEX:
         deadline = datetime.now(timezone.utc) + timedelta(minutes=settings.extract_job_minutes)
-        stats = run_index(db, deadline=deadline, retry=bool(job.payload.get("retry")))
+        stats = run_index(db, deadline=deadline, retry=bool(job.payload.get("retry")),
+                          rebuild_share=job.payload.get("rebuild_share"))
         if stats.pending:
             # Time's up: let queued scans run, then carry on where this one stopped.
             jobs.enqueue(db, jobs.INDEX, priority=INDEX_PRIORITY + 10)
@@ -102,12 +103,25 @@ def maybe_schedule(db, last_scheduled: datetime | None, now: datetime | None = N
 
 
 def housekeeping(db) -> None:
-    """Remove expired sessions and audit events older than AUDIT_RETENTION_DAYS."""
-    n = db.execute(delete(AuthSession).where(AuthSession.expires_at < datetime.now(timezone.utc))).rowcount or 0
+    """
+    Remove expired sessions, audit events older than AUDIT_RETENTION_DAYS, and
+    accounts nobody has signed in with for as long (the privacy notice says so).
+    """
+    now = datetime.now(timezone.utc)
+    n = db.execute(delete(AuthSession).where(AuthSession.expires_at < now)).rowcount or 0
     db.commit()
     if n:
         logger.info("Removed %d expired session(s).", n)
     audit.purge_old(db)
+    if settings.audit_retention_days > 0:
+        cutoff = now - timedelta(days=settings.audit_retention_days)
+        idle = (User.last_login < cutoff) | User.last_login.is_(None)
+        n = db.execute(
+            delete(User).where(idle, ~select(AuthSession.id).where(AuthSession.user_id == User.id).exists())
+        ).rowcount or 0
+        db.commit()
+        if n:
+            logger.info("Removed %d account(s) unused for %d days.", n, settings.audit_retention_days)
 
 
 def main() -> None:

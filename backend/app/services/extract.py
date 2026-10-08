@@ -58,6 +58,15 @@ def can_extract(extension: str) -> bool:
     return extension in EXTRACTABLE
 
 
+def initial_status(extension: str, size: int) -> str:
+    """Indexing status of a new (or changed) file: whether its text is worth reading."""
+    if not can_extract(extension):
+        return "metadata"
+    if size > settings.extract_max_size:
+        return "too_large"
+    return "pending"
+
+
 def extract(extension: str, data: bytes) -> Extracted:
     if extension == "pdf":
         return _pdf(data)

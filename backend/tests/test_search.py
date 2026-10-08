@@ -17,7 +17,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.auth import sessions
 from app.config import settings
@@ -104,6 +104,88 @@ def test_unsupported_and_oversized_files_are_searchable_by_name(db, library, cli
     assert names(client, "planta") == ["plano planta baja.dwg"]
 
 
+def rescan(db):
+    scan_share(db, db.scalar(select(Share)))
+    return run_index(db)
+
+
+class SpyExtractor:
+    """Records what the content pass actually reads."""
+
+    def __init__(self, slow: float = 0):
+        self.read: list[bytes] = []
+        self.slow = slow
+
+    def extract(self, extension, data):
+        import time
+        from app.services.extract import extract
+
+        self.read.append(data)
+        time.sleep(self.slow)
+        return extract(extension, data)
+
+    def close(self):
+        pass
+
+
+def test_changed_name_only_file_is_not_read(db, library):
+    """BUG-025: an edited .dwg or .zip used to be downloaded and marked "error"."""
+    import time
+    write(library / "plano.dwg", b"v1")
+    write(library / "fotos.zip", b"zip v1")
+    rescan(db)
+    time.sleep(1.1)  # mtime resolution
+    write(library / "plano.dwg", b"v2, edited")
+    write(library / "fotos.zip", b"zip v2, edited")
+    scan_share(db, db.scalar(select(Share)))
+    spy = SpyExtractor()
+    stats = run_index(db, extractor=spy)
+    statuses = dict(db.execute(select(File.name, Document.status).join(Document)).all())
+    assert statuses["plano.dwg"] == statuses["fotos.zip"] == "metadata"
+    assert stats.failed == 0 and spy.read == []
+
+
+def test_file_that_killed_the_worker_is_not_read_again(db, library):
+    """BUG-024: a file left `extracting` by a dead worker fails instead of looping."""
+    fid = file_id(db, "readme.txt")
+    db.execute(update(Document).where(Document.file_id == fid).values(status="extracting"))
+    db.commit()
+    spy = SpyExtractor()
+    stats = run_index(db, extractor=spy)
+    doc = db.get(Document, fid)
+    db.refresh(doc)
+    assert stats.interrupted == 1 and doc.status == "error" and "worker stopped" in doc.error
+    assert spy.read == []
+
+
+def test_extraction_failure_of_one_file_keeps_the_others(db, library, monkeypatch):
+    from app.services.extract import ExtractionError
+
+    write(library / "a.txt", "first")
+    write(library / "b.txt", "second")
+    scan_share(db, db.scalar(select(Share)))
+
+    class Picky(SpyExtractor):
+        def extract(self, extension, data):
+            if data == b"first":
+                raise ExtractionError("the file crashed the text extractor (exit code -11)")
+            return super().extract(extension, data)
+
+    run_index(db, extractor=Picky())
+    statuses = dict(db.execute(select(File.name, Document.status).join(Document)).all())
+    assert statuses["a.txt"] == "error" and statuses["b.txt"] == "text"
+
+
+def test_index_round_stops_at_its_deadline(db, library):
+    """BUG-026: the deadline is checked after every file, not every 20."""
+    for i in range(4):
+        write(library / f"note{i}.txt", f"note number {i}")
+    scan_share(db, db.scalar(select(Share)))
+    spy = SpyExtractor(slow=0.3)
+    stats = run_index(db, deadline=datetime.now(timezone.utc) + timedelta(seconds=0.1), extractor=spy)
+    assert len(spy.read) == 1 and stats.pending == 3
+
+
 # ── Search and permissions ────────────────────────────────────────────────────
 
 def test_search_shows_each_user_only_what_windows_lets_them_open(client, library):
@@ -170,6 +252,89 @@ def test_disabled_share_disappears_from_search(client, db, library):
     db.scalar(select(Share)).enabled = False
     db.commit()
     assert names(client, "") == []
+
+
+def test_file_stricter_than_its_folder_keeps_its_text_to_itself(client, db, library):
+    """BUG-023: the folder lets everyone read; the file itself only HR."""
+    write(library / "salaries.txt", "Confidential salary review")
+    write(library / "minutes.txt", "Board minutes everyone may read")
+    acl(library, files={"salaries.txt": {"read": ["hr"]},
+                        "minutes.txt": {"deny": ["bob"], "inherit": True}})
+    rescan(db)
+    salaries = file_id(db, "salaries.txt")
+
+    sign_in(client, "carol")
+    assert names(client, "salary") == [] and names(client, "salaries") == []
+    assert names(client, "minutes") == ["minutes.txt"]  # inherits "everyone" from the share root
+    assert client.get(f"/documents/{salaries}").status_code == 404
+    root = db.scalar(select(File.folder_id).where(File.id == salaries))
+    listed = [f["name"] for f in client.get(f"/browse/folders/{root}").json()["files"]]
+    assert "salaries.txt" not in listed and "minutes.txt" in listed
+
+    sign_in(client, "bob")  # hr
+    assert names(client, "salary") == ["salaries.txt"]
+    assert "Confidential" in client.get(f"/documents/{salaries}").json()["text_excerpt"]
+    assert names(client, "minutes") == []  # his explicit deny comes before the inherited allow
+
+
+def test_file_shared_in_a_folder_whose_files_are_closed(client, db, library):
+    """A file of its own in "this folder only" Public: visible although its neighbours aren't."""
+    acl(library / "Public", list=["everyone"], read=["finance"],
+        files={"open letter.txt": {"read": ["everyone"]}})
+    write(library / "Public" / "open letter.txt", "An open letter")
+    rescan(db)
+    sign_in(client, "carol")
+    assert names(client, "letter") == ["open letter.txt"]
+    public = db.scalar(select(File.folder_id).where(File.name == "notice.txt"))
+    view = client.get(f"/browse/folders/{public}").json()
+    assert [f["name"] for f in view["files"]] == ["open letter.txt"] and view["files_hidden"] is False
+    assert [s["label"] for s in client.get("/search/filters").json()["shares"]] == ["Dept"]
+
+
+def test_count_is_optional_and_capped(client, library, monkeypatch):
+    """BUG-027."""
+    from app.services import search as search_service
+
+    sign_in(client, "alice")
+    r = client.get("/search", params={"q": "", "count": False, "sort": "newest"}).json()
+    assert r["total"] is None and len(r["results"]) == 4  # not HR: denied
+    monkeypatch.setattr(search_service, "COUNT_CAP", 2)
+    r = client.get("/search", params={"q": ""}).json()
+    assert r["total"] == 2 and r["total_capped"] is True and len(r["results"]) == 4
+
+
+def test_name_matches_survive_when_too_many_documents_match(client, db, library, monkeypatch):
+    """BUG-027: past COUNT_CAP matches only candidates are ranked; a matching name must stay one."""
+    from app.services import search as search_service
+
+    if db.get_bind().dialect.name == "sqlite":
+        pytest.skip("ranking needs PostgreSQL full-text search")
+    write(library / "contrato marco.txt", "Acuerdo general con el proveedor")
+    os.utime(library / "contrato marco.txt", (0, 946684800))  # 2000-01-01: the oldest of all
+    for i in range(5):
+        write(library / f"nota {i}.txt", f"Este contrato número {i} sigue en revisión")
+    rescan(db)
+    monkeypatch.setattr(search_service, "COUNT_CAP", 2)
+    sign_in(client, "carol")
+    r = client.get("/search", params={"q": "contrato"}).json()
+    assert r["total"] == 2 and r["total_capped"] is True
+    assert r["results"][0]["name"] == "contrato marco.txt"  # by name, though only 2 newest by content
+
+
+def test_renamed_share_is_found_by_its_new_name(client, db, library):
+    """BUG-030: the share's name is part of every path in the index."""
+    from app.models import Job
+
+    sign_in(client, "admin")
+    share = db.scalar(select(Share))
+    assert client.put(f"/admin/shares/{share.id}", json={"name": "Departamento"}).status_code == 200
+    job = db.scalar(select(Job).where(Job.kind == "index"))
+    assert job.payload == {"rebuild_share": share.id}
+    run_index(db, rebuild_share=share.id)
+    sign_in(client, "carol")
+    assert names(client, "departamento") == ["readme.txt"]
+    assert names(client, "dept") == []
+    assert names(client, "welcome") == ["readme.txt"]  # the text is still searchable
 
 
 # ── Browse ────────────────────────────────────────────────────────────────────
@@ -326,3 +491,42 @@ def test_account_removed_from_ad_ends_the_session(client, db, library, monkeypat
     monkeypatch.setattr(sessions, "lookup_user", lambda username: None)
     assert client.get("/auth/me").status_code == 401
     assert db.scalar(select(AuthSession)) is None
+
+
+def test_browser_gets_a_page_not_json_when_a_file_cant_be_opened(client, db, library):
+    """BUG-028: download and preview are plain links; JSON would replace the app."""
+    sign_in(client, "alice")
+    fid = file_id(db, "presupuesto 2025.docx")
+    acl(library / "Finance", read=["finance"], deny=["alice"])
+    tab = {"Sec-Fetch-Dest": "document", "Accept": "text/html"}
+    r = client.get(f"/documents/{fid}/download", headers=tab)
+    assert r.status_code == 403 and r.headers["content-type"].startswith("text/html")
+    assert "You can&#x27;t open this file" in r.text and f'href="/documents/{fid}"' in r.text
+    # The app's own requests still get JSON.
+    assert client.get(f"/documents/{fid}/download").json()["detail"].startswith("The file server")
+
+    client.post("/auth/logout")
+    r = client.get(f"/documents/{fid}/preview", headers={"Sec-Fetch-Dest": "iframe"})
+    assert r.status_code == 401 and 'href="/login"' in r.text
+
+
+def test_download_handle_is_closed_even_if_never_read(library):
+    """BUG-032: a browser that disconnects before the first chunk never runs the iterator."""
+    from contextlib import contextmanager
+
+    from app.services.library import open_stream
+    from app.services.sources import LocalSource
+
+    opened = []
+
+    class Recording(LocalSource):
+        @contextmanager
+        def open_read(self, relpath):
+            with super().open_read(relpath) as fh:
+                opened.append(fh)
+                yield fh
+
+    chunks, close = open_stream(Recording(str(library)), "readme.txt")
+    assert not opened[0].closed
+    close()
+    assert opened[0].closed

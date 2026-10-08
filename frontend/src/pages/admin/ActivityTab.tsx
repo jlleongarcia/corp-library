@@ -36,12 +36,13 @@ const INDEX_LABELS: [keyof IndexStatusReport['counts'], string, string][] = [
   ['text', 'Text indexed', 'Content searchable'],
   ['ocr', 'Read by OCR', 'Scanned documents'],
   ['pending', 'Waiting', 'Content not read yet'],
+  ['extracting', 'Reading now', 'Being extracted'],
   ['not_indexed', 'New', 'Not processed yet'],
   ['metadata', 'Name only', 'Types without text (images, CAD, …)'],
   ['too_large', 'Too large', 'Above EXTRACT_MAX_SIZE'],
   ['empty', 'No text', 'Nothing to extract'],
   ['ocr_unavailable', 'Needs OCR', 'Scans; Tesseract missing'],
-  ['error', 'Unreadable', 'Protected or damaged'],
+  ['error', 'Unreadable', 'Protected, damaged, or crashed the reader'],
 ]
 
 function IndexCard({ onReindex }: { onReindex: () => void }) {
