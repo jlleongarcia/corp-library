@@ -50,14 +50,15 @@ def run_job(db, job: Job) -> None:
         if share is None or not share.enabled:
             raise RuntimeError(f"Share {job.payload['share_id']} missing or disabled")
         run = scan_share(db, share)
-        if run.status == "failed":
-            raise RuntimeError(run.error_sample or "scan failed")
-        # After the last scan of a batch, refresh names/groups and duplicates.
+        # After the last scan of a batch, refresh names/groups and duplicates, even
+        # if this one failed: the other shares' scans still need them (BUG-042).
         if jobs.pending_scans(db) <= 1:  # only this job is still running
             jobs.enqueue(db, jobs.RESOLVE, priority=RESOLVE_PRIORITY)
             jobs.enqueue(db, jobs.INDEX, priority=INDEX_PRIORITY)
             jobs.enqueue(db, jobs.DEDUPE, priority=DEDUPE_PRIORITY)
             jobs.enqueue(db, jobs.COMPLIANCE, priority=COMPLIANCE_PRIORITY)
+        if run.status == "failed":
+            raise RuntimeError(run.error_sample or "scan failed")
     elif job.kind == jobs.RESOLVE:
         directory = open_directory()
         try:

@@ -291,7 +291,7 @@ class PlanSnapshot(Base):
     taken_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     files_total: Mapped[int] = mapped_column(Integer, default=0)
     files_in_plan: Mapped[int] = mapped_column(Integer, default=0)
-    files_checked: Mapped[int] = mapped_column(Integer, default=0)  # in the plan, under a naming or type rule
+    files_checked: Mapped[int] = mapped_column(Integer, default=0)  # in the plan, under a naming pattern
     files_misnamed: Mapped[int] = mapped_column(Integer, default=0)
     files_wrong_type: Mapped[int] = mapped_column(Integer, default=0)
     folders_planned: Mapped[int] = mapped_column(Integer, default=0)

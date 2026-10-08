@@ -18,6 +18,7 @@ Phase 2: the folder plan, its guide, the compliance report and its progress.
 
 import json
 import os
+import time
 from datetime import date, timedelta
 
 import pytest
@@ -93,6 +94,17 @@ def test_naming_patterns():
         plan.compile_pattern("{DATE} *")
 
 
+def test_naming_patterns_with_many_stars_stay_fast():
+    # BUG-037: each `*` was a backtracking `.*`; this took 20 s for one file.
+    started = time.perf_counter()
+    assert not name_matches("* * * * * * x", "a " * 120 + ".pdf")
+    assert time.perf_counter() - started < 0.5
+    # Each part between stars matches as early as it can, without losing matches.
+    assert name_matches("*{N}*{N}", "12.pdf")
+    assert name_matches("* - {YYYY} - *", "Obra - 2024 - fase 2 - 2025 - final.pdf")
+    assert not name_matches("* - {YYYY}", "Obra - 2024 - fase.pdf")
+
+
 def test_paths_are_normalized_and_validated():
     assert normalize_path("\\Finance\\\\Budget\\ ") == "Finance/Budget"
     assert normalize_path(" / ") == ""
@@ -145,6 +157,16 @@ def test_editor_keeps_the_plan_a_tree(client, admin, share):
     assert client.get("/admin/plan").json() == []
 
 
+def test_plan_lists_each_folder_before_its_subfolders(client, admin, share):
+    # BUG-035: sorted by path, "Contratos 2024" came between "Contratos" and "Contratos/2024"
+    # (" " < "/"), so the editor and the guide drew 2024 under the wrong folder.
+    for path in ("", "Contratos", "Contratos 2024", "Contratos-B", "Contratos/2024", "Contratos/2024/Obras"):
+        add(client, share.id, path)
+    order = ["", "Contratos", "Contratos/2024", "Contratos/2024/Obras", "Contratos 2024", "Contratos-B"]
+    assert [e["path"] for e in client.get("/admin/plan").json()] == order
+    assert [e["path"] for e in client.get("/plan").json()[0]["entries"]] == order
+
+
 def test_plan_can_start_from_the_existing_folders(client, admin, share):
     r = client.post("/admin/plan/import", json={"share_id": share.id, "depth": 1})
     assert r.status_code == 201 and r.json() == {"added": 5}
@@ -195,6 +217,48 @@ def test_lists_are_capped_but_totals_count_everything(db, planned):
     assert data["totals"]["files_in_plan"] == 6
 
 
+def test_lists_keep_the_biggest_problems_and_the_csv_keeps_them_all(client, db, planned):
+    # BUG-036: the first `limit` items found were kept (in database order), not the biggest.
+    data = plan.evaluate(db, db.get(Share, planned.id), limit=1)
+    assert [(i["reason"], i["files"]) for i in data["outside"]["items"]] == [("not_in_plan", 2)]
+    # The CSV lists everything, whatever the limit (the UI says "export for all").
+    csv = client.get("/admin/reports/compliance", params={"share_id": planned.id, "limit": 1, "format": "csv"})
+    assert "outside the plan" in csv.text and "files not allowed here" in csv.text
+
+
+def test_unlisted_folders_are_not_reported_empty_or_missing(client, db, planned):
+    # BUG-038: what's in a folder the scanner couldn't list is unknown.
+    add(client, planned.id, "Archivo/2020")
+    totals = client.get("/admin/reports/compliance", params={"share_id": planned.id}).json()["totals"]
+    assert (totals["folders_empty"], totals["folders_missing"]) == (1, 2)  # Archivo; Actas, Archivo/2020
+    archivo = db.scalar(select(Folder).where(Folder.share_id == planned.id, Folder.path == "Archivo"))
+    archivo.list_error = "Access denied"
+    db.commit()
+    data = client.get("/admin/reports/compliance", params={"share_id": planned.id}).json()
+    assert (data["totals"]["folders_empty"], data["totals"]["folders_missing"]) == (0, 1)
+    assert data["missing"]["items"][0]["path"].endswith("Actas")
+
+
+def test_correctly_named_counts_only_files_under_a_naming_pattern(client, db, planned):
+    # BUG-039: files under a file-type rule only counted as "checked", inflating "correctly named".
+    client.put(f"/admin/plan/{_entry_id(client, 'Personal')}", json={"extensions": ["txt"]})
+    totals = plan.evaluate(db, db.get(Share, planned.id))["totals"]
+    assert (totals["files_checked"], totals["files_misnamed"]) == (4, 1)  # Contratos and its 2024 folder
+
+
+def test_csv_download_name_may_hold_any_character(client, db, planned):
+    # BUG-040: the share's name went into a Latin-1 header: "€" was a 500.
+    share = db.get(Share, planned.id)
+    share.name = 'Gestión "€"'
+    db.commit()
+    r = client.get("/admin/reports/compliance", params={"share_id": planned.id, "format": "csv"})
+    assert r.status_code == 200
+    assert r.headers["content-disposition"] == (
+        'attachment; filename="compliance-Gesti_n ___.csv"; '
+        "filename*=UTF-8''compliance-Gesti%C3%B3n%20%22%E2%82%AC%22.csv"
+    )
+
+
 def test_share_without_a_plan_has_no_report(client, admin, share):
     assert client.get("/admin/reports/compliance", params={"share_id": share.id}).status_code == 404
 
@@ -228,6 +292,18 @@ def test_snapshot_follows_every_scan_batch_and_can_be_requested(client, db, plan
     assert r.status_code == 202 and r.json()["kind"] == "compliance"
     run_job(db, db.get(Job, r.json()["id"]))
     assert db.scalar(select(PlanSnapshot.files_total)) == 9
+
+
+def test_follow_up_jobs_are_queued_even_if_the_last_scan_fails(db, planned, tmp_path):
+    # BUG-042: an unreachable share scanned last meant no snapshot (nor index, dedupe) that night.
+    gone = Share(name="Gone", path=str(tmp_path / "not-there"))
+    db.add(gone)
+    db.commit()
+    jobs.enqueue(db, jobs.SCAN, {"share_id": gone.id})
+    with pytest.raises(RuntimeError):
+        run_job(db, jobs.claim_next(db))
+    queued = set(db.scalars(select(Job.kind).where(Job.status == "queued")))
+    assert {jobs.COMPLIANCE, jobs.INDEX, jobs.DEDUPE, jobs.RESOLVE} <= queued
 
 
 def _entry_id(client, path):
@@ -269,3 +345,17 @@ def test_browse_shows_where_a_folder_stands_in_the_plan(client, db, planned):
     client.delete(f"/admin/plan/{_entry_id(client, '')}")
     sign_in(client, "bob")
     assert placement("Contratos") is None
+
+
+def test_browse_hides_the_guide_of_a_folder_above_that_the_user_cannot_list(client, db, planned):
+    # BUG-041: under a folder closed to them, users saw its guide (purpose, owner...) while browsing.
+    root = db.get(Share, planned.id).path
+    write(os.path.join(root, "Personal", "Abierto", ".corplib-acl.json"), json.dumps({"read": ["everyone"]}))
+    write(os.path.join(root, "Personal", "Abierto", "horario.txt"))
+    assert scan_share(db, db.get(Share, planned.id)).status == "success"
+    folder_id = db.scalar(select(Folder.id).where(Folder.share_id == planned.id, Folder.path == "Personal/Abierto"))
+
+    sign_in(client, "carol")  # may open Abierto, not Personal
+    assert client.get(f"/browse/folders/{folder_id}").json()["plan"] == {"status": "outside", "entry": None}
+    sign_in(client, "bob")
+    assert client.get(f"/browse/folders/{folder_id}").json()["plan"]["entry"]["purpose"] == "Staff files"

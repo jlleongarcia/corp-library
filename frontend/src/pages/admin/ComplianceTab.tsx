@@ -241,7 +241,7 @@ function Report({ shareId }: { shareId: number }) {
           hint={`${number(t.folders_missing)} not created yet, ${number(t.folders_empty)} empty`} />
         <Stat label="Overgrown folders" value={number(t.folders_overgrown)} hint="Too many files directly in them" />
       </div>
-      <div className="flex justify-end"><ExportButton path="/admin/reports/compliance" params={{ share_id: shareId, limit: 5000 }} /></div>
+      <div className="flex justify-end"><ExportButton path="/admin/reports/compliance" params={{ share_id: shareId }} /></div>
 
       <Card title={`Outside the plan${more(r.outside)}`}>
         <p className="text-sm text-gray-500 mb-3">

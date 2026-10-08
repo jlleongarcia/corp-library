@@ -22,6 +22,7 @@ ignoring case and accents. `*` is any text, `?` one character, and
 number: "{YYYY}-{MM}-{DD} *" accepts "2025-03-14 Acta consejo".
 """
 
+import heapq
 import posixpath
 import re
 from dataclasses import dataclass
@@ -48,7 +49,7 @@ PATTERN_TOKENS = {
     "YY": r"\d\d",
     "MM": r"(?:0[1-9]|1[0-2])",
     "DD": r"(?:0[1-9]|[12]\d|3[01])",
-    "N": r"\d+",
+    "N": r"\d+?",  # lazy, so a part between stars ends as early as it can (compile_pattern)
 }
 _PATTERN_PART = re.compile(r"\{([^{}]*)\}|.", re.DOTALL)
 # Not allowed in Windows file and folder names.
@@ -105,7 +106,9 @@ def _stem(name: str) -> str:
 
 @lru_cache(maxsize=512)
 def compile_pattern(pattern: str) -> re.Pattern:
-    out = []
+    # The parts between stars. Translating each `*` to `.*` backtracks
+    # exponentially: "* * * * * x" took 20 s on one long name (BUG-037).
+    chunks: list[list[str]] = [[]]
     for m in _PATTERN_PART.finditer(pattern.strip()):
         token, char = m.group(1), m.group(0)
         if token is not None:
@@ -113,14 +116,21 @@ def compile_pattern(pattern: str) -> re.Pattern:
             if regex is None:
                 known = " ".join("{" + t + "}" for t in PATTERN_TOKENS)
                 raise PlanError(f"Unknown {char} in the naming pattern; use {known}, * or ?")
-            out.append(regex)
+            chunks[-1].append(regex)
         elif char == "*":
-            out.append(".*")
+            chunks.append([])
         elif char == "?":
-            out.append(".")
+            chunks[-1].append(".")
         else:
-            out.append(re.escape(fold(char)))
-    return re.compile("".join(out), re.DOTALL)
+            chunks[-1].append(re.escape(fold(char)))
+    first, *middle, last = ["".join(c) for c in chunks] if len(chunks) > 1 else ["".join(chunks[0]), None]
+    # Each middle part takes its earliest match and never gives it back (an
+    # atomic group): the classic glob algorithm, linear instead of exponential.
+    # Matching it as early as possible leaves the most room for what follows.
+    out = first + "".join(f"(?>.*?{c})" for c in middle if c)
+    if last is not None:
+        out += ".*" + last
+    return re.compile(out, re.DOTALL)
 
 
 def name_matches(pattern: str, filename: str) -> bool:
@@ -141,11 +151,19 @@ def _clean_list(values: list[str], kind: str) -> list[str]:
 
 # ── Editing ───────────────────────────────────────────────────────────────────
 
+def tree_order(key: str) -> list[str]:
+    # By path parts, so each folder comes right before its subfolders. Sorting
+    # the plain path puts "a b" between "a" and "a/x" (" " < "/"), and
+    # PostgreSQL's collation ignores the "/" altogether (BUG-035).
+    return key.split("/")
+
+
 def entries(db: Session, share_id: Optional[int] = None) -> list[PlanFolder]:
-    stmt = select(PlanFolder).order_by(PlanFolder.share_id, PlanFolder.path_key)
+    """A share's plan (or every share's), as a tree: each entry before the ones below it."""
+    stmt = select(PlanFolder)
     if share_id is not None:
         stmt = stmt.where(PlanFolder.share_id == share_id)
-    return list(db.scalars(stmt))
+    return sorted(db.scalars(stmt), key=lambda e: (e.share_id, tree_order(e.path_key)))
 
 
 def _by_key(db: Session, share_id: int) -> dict[str, PlanFolder]:
@@ -306,7 +324,8 @@ def _folders_up_to(db: Session, share_id: int, depth: int) -> dict[str, tuple[in
     }
 
 
-def _depth(path: str) -> int:
+def depth(path: str) -> int:
+    """Folders below the share's root: "" is 0, "a/b" is 2."""
     return path.count("/") + 1 if path else 0
 
 
@@ -318,8 +337,8 @@ def admin_view(db: Session, share_id: Optional[int] = None) -> list[dict]:
     folders_by_share: dict[int, dict] = {}
     for e in plan:
         if e.share_id not in folders_by_share:
-            depth = max(_depth(x.path) for x in plan if x.share_id == e.share_id)
-            folders_by_share[e.share_id] = _folders_up_to(db, e.share_id, depth)
+            deepest = max(depth(x.path) for x in plan if x.share_id == e.share_id)
+            folders_by_share[e.share_id] = _folders_up_to(db, e.share_id, deepest)
         folder = folders_by_share[e.share_id].get(e.path_key)
         out.append(entry_dict(e, shares[e.share_id], folder_id=folder[0] if folder else None,
                               exists=folder is not None, problems=example_problems(e), admin=True))
@@ -330,7 +349,7 @@ def entry_dict(e: PlanFolder, share: Share, folder_id: Optional[int] = None, exi
                problems: Optional[list[str]] = None, admin: bool = False) -> dict:
     d = {
         "id": e.id, "share_id": e.share_id, "share": share.name, "path": e.path,
-        "name": posixpath.basename(e.path) or share.name, "depth": _depth(e.path),
+        "name": posixpath.basename(e.path) or share.name, "depth": depth(e.path),
         "network_path": display_path(share.path, e.path),
         "purpose": e.purpose, "belongs": e.belongs, "not_belongs": e.not_belongs, "owner": e.owner,
         "naming": e.naming, "naming_pattern": e.naming_pattern, "examples": e.examples,
@@ -359,7 +378,7 @@ def guide(db: Session, token: frozenset[str]) -> list[dict]:
         mine = [e for e in plan if e.share_id == share.id]
         if not mine:
             continue
-        folders = _folders_up_to(db, share.id, max(_depth(e.path) for e in mine))
+        folders = _folders_up_to(db, share.id, max(depth(e.path) for e in mine))
         visible = []
         for e in mine:
             key = e.path_key
@@ -377,27 +396,53 @@ def guide(db: Session, token: frozenset[str]) -> list[dict]:
 
 # ── Compliance ────────────────────────────────────────────────────────────────
 
-class _Capped:
-    """A list that keeps the first `limit` items and counts them all."""
+class _Desc:
+    """Reverses the order of a sort key (heapq only keeps the smallest items)."""
 
-    def __init__(self, limit: int):
-        self.limit, self.count, self.items = limit, 0, []
+    __slots__ = ("key",)
+
+    def __init__(self, key):
+        self.key = key
+
+    def __lt__(self, other: "_Desc") -> bool:
+        return other.key < self.key
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _Desc) and other.key == self.key
+
+
+class _Capped:
+    """
+    The first `limit` items in `key` order (all of them if limit is None), and
+    how many there were. Keeping the first ones *added* would show an arbitrary
+    200 of the biggest offenders, in database order (BUG-036).
+    """
+
+    def __init__(self, limit: Optional[int], key):
+        self.limit, self.key, self.count = limit, key, 0
+        self._heap: list = []  # the kept items, largest key on top
 
     def add(self, item: dict) -> None:
         self.count += 1
-        if len(self.items) < self.limit:
-            self.items.append(item)
+        if self.limit == 0:
+            return
+        entry = (_Desc(self.key(item)), _Desc(self.count), item)
+        if self.limit is None or len(self._heap) < self.limit:
+            heapq.heappush(self._heap, entry)
+        elif entry[0].key < self._heap[0][0].key:
+            heapq.heapreplace(self._heap, entry)
 
-    def out(self, sort_key=None, reverse=False) -> dict:
-        items = sorted(self.items, key=sort_key, reverse=reverse) if sort_key else self.items
+    def out(self) -> dict:
+        items = [item for _, _, item in sorted(self._heap, reverse=True)]
         return {"count": self.count, "items": items}
 
 
-def evaluate(db: Session, share: Share, limit: int = 200) -> Optional[dict]:
+def evaluate(db: Session, share: Share, limit: Optional[int] = 200) -> Optional[dict]:
     """
     How one share follows its plan: files outside it, misnamed files, files of
     unexpected types, planned folders missing or empty, and overgrown folders.
-    None if the share has no plan. Lists keep `limit` items; totals count all.
+    None if the share has no plan. Lists keep the first `limit` items (the
+    biggest folders first, files by path; None: all); totals count all.
     """
     plan = _by_key(db, share.id)
     if not plan:
@@ -410,21 +455,33 @@ def evaluate(db: Session, share: Share, limit: int = 200) -> Optional[dict]:
         select(File.folder_id, func.count(File.id)).where(File.share_id == share.id).group_by(File.folder_id)
     ).all())
     subtree = dict(direct)
+    # Folders the scanner couldn't list, or with one below them: what they hold is unknown (BUG-038).
+    unlisted = {fid for fid, _, _, _, list_error in rows if list_error is not None}
+    unknown = set(unlisted)
     for fid, parent, _, _, _ in sorted(rows, key=lambda r: r[3], reverse=True):
         if parent is not None:
             subtree[parent] = subtree.get(parent, 0) + subtree.get(fid, 0)
+            if fid in unknown:
+                unknown.add(parent)
 
     def where(p: str, name: str = "") -> str:
         return display_path(share.path, p, name)
 
+    def by_path(x: dict):
+        return tree_order(x["path"].lower().replace("\\", "/"))
+
+    def biggest(x: dict):
+        return (-x["files"], by_path(x))
+
     placements = {fid: place(plan, p) for fid, _, p, _, _ in rows}
     paths = {fid: p for fid, _, p, _, _ in rows}
-    outside, misnamed, wrong_type = _Capped(limit), _Capped(limit), _Capped(limit)
-    missing, empty, overgrown = _Capped(limit), _Capped(limit), _Capped(limit)
+    outside, overgrown = _Capped(limit, biggest), _Capped(limit, biggest)
+    misnamed, wrong_type, empty = _Capped(limit, by_path), _Capped(limit, by_path), _Capped(limit, by_path)
+    missing = _Capped(limit, by_path)
     files_outside = 0
     governed: dict[int, PlanFolder] = {}  # folder -> entry whose naming/type rules apply
 
-    for fid, parent, p, _, list_error in rows:
+    for fid, parent, p, _, _ in rows:
         pl, n = placements[fid], direct.get(fid, 0)
         if pl.status == "outside":
             files_outside += n
@@ -436,7 +493,7 @@ def evaluate(db: Session, share: Share, limit: int = 200) -> Optional[dict]:
                 })
             continue
         entry = pl.entry
-        if pl.status == "planned" and subtree.get(fid, 0) == 0 and list_error is None:
+        if pl.status == "planned" and subtree.get(fid, 0) == 0 and fid not in unknown:
             empty.add({"plan_id": entry.id, "path": where(p)})
         if pl.status == "planned" and not entry.allow_files:
             if n:
@@ -450,22 +507,30 @@ def evaluate(db: Session, share: Share, limit: int = 200) -> Optional[dict]:
         if n > cap:
             overgrown.add({"path": where(p), "folder_id": fid, "files": n, "limit": cap})
 
-    existing = {path_key(p) for p in paths.values()}
-    for e in sorted(plan.values(), key=lambda e: e.path_key):
-        if e.path_key not in existing:
-            missing.add({"plan_id": e.id, "path": where(e.path)})
+    existing = {path_key(p): fid for fid, p in paths.items()}
+    for e in plan.values():
+        if e.path_key in existing:
+            continue
+        key = e.path_key
+        while key and key not in existing:
+            key = posixpath.dirname(key)
+        if existing.get(key) in unlisted:
+            continue  # it may be there: the folder that would hold it couldn't be listed
+        missing.add({"plan_id": e.id, "path": where(e.path)})
 
-    checked = 0
+    named = 0
     ids = list(governed)
     for i in range(0, len(ids), _CHUNK):
         for folder_id, name, ext in db.execute(
             select(File.folder_id, File.name, File.extension).where(File.folder_id.in_(ids[i:i + _CHUNK]))
         ):
             entry = governed[folder_id]
-            checked += 1
-            if entry.naming_pattern and not name_matches(entry.naming_pattern, name):
-                misnamed.add({"path": where(paths[folder_id], name), "pattern": entry.naming_pattern,
-                              "plan_id": entry.id, "plan_path": where(entry.path)})
+            if entry.naming_pattern:
+                # Only files under a naming rule count towards "correctly named" (BUG-039).
+                named += 1
+                if not name_matches(entry.naming_pattern, name):
+                    misnamed.add({"path": where(paths[folder_id], name), "pattern": entry.naming_pattern,
+                                  "plan_id": entry.id, "plan_path": where(entry.path)})
             if entry.extensions and ext not in entry.extensions:
                 wrong_type.add({"path": where(paths[folder_id], name), "extension": ext,
                                 "allowed": entry.extensions, "plan_id": entry.id, "plan_path": where(entry.path)})
@@ -475,16 +540,16 @@ def evaluate(db: Session, share: Share, limit: int = 200) -> Optional[dict]:
         "share_id": share.id, "share": share.name,
         "totals": {
             "files_total": files_total, "files_in_plan": files_total - files_outside,
-            "files_checked": checked, "files_misnamed": misnamed.count, "files_wrong_type": wrong_type.count,
+            "files_checked": named, "files_misnamed": misnamed.count, "files_wrong_type": wrong_type.count,
             "folders_planned": len(plan), "folders_missing": missing.count,
             "folders_empty": empty.count, "folders_overgrown": overgrown.count,
         },
-        "outside": outside.out(lambda x: -x["files"]),
-        "misnamed": misnamed.out(lambda x: x["path"].lower()),
-        "wrong_type": wrong_type.out(lambda x: x["path"].lower()),
+        "outside": outside.out(),
+        "misnamed": misnamed.out(),
+        "wrong_type": wrong_type.out(),
         "missing": missing.out(),
-        "empty": empty.out(lambda x: x["path"].lower()),
-        "overgrown": overgrown.out(lambda x: -x["files"]),
+        "empty": empty.out(),
+        "overgrown": overgrown.out(),
     }
 
 

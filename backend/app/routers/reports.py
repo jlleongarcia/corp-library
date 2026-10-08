@@ -3,8 +3,10 @@
 import csv
 import io
 import json
+import re
 from datetime import date, datetime
 from typing import Literal, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -33,6 +35,16 @@ def _cell(value):
     return value
 
 
+def _attachment(filename: str) -> str:
+    """
+    A download name may hold a share's name, which can have any character:
+    headers are Latin-1, so "€" was a 500 and '"' broke the header (BUG-040).
+    ASCII for old clients, the real name (RFC 6266) for browsers.
+    """
+    fallback = re.sub(r'[^A-Za-z0-9 ._-]', "_", filename)
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
 def _csv(rows: list[dict], filename: str) -> StreamingResponse:
     buf = io.StringIO()
     buf.write("﻿")  # BOM so Excel opens UTF-8 (accents) correctly
@@ -45,7 +57,7 @@ def _csv(rows: list[dict], filename: str) -> StreamingResponse:
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}.csv"'},
+        headers={"Content-Disposition": _attachment(f"{filename}.csv")},
     )
 
 
@@ -183,11 +195,11 @@ def plan_export(share_id: Optional[int] = None, format: Format = "csv", db: Sess
 def compliance(
     share_id: int, limit: int = Query(200, ge=1, le=5000), format: Format = "json", db: Session = Depends(get_db),
 ):
-    """How one share follows its plan, computed now from the last scan."""
+    """How one share follows its plan, computed now from the last scan. The CSV lists everything."""
     share = db.get(Share, share_id)
     if share is None:
         raise HTTPException(status_code=404, detail="Share not found")
-    data = plan.evaluate(db, share, limit)
+    data = plan.evaluate(db, share, None if format == "csv" else limit)
     if data is None:
         raise HTTPException(status_code=404, detail="This share has no folder plan yet")
     if format == "csv":

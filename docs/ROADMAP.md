@@ -1,6 +1,6 @@
 # Corp Library — Roadmap
 
-_Last updated: 2026-10-08 (phase 2 implemented; phase 1 waiting on IT for SSO and real-user verification)_
+_Last updated: 2026-10-08 (phase 2 implemented and audited; phase 1 waiting on IT for SSO and real-user verification)_
 
 Corp Library is an internal web app that helps our department (~15 people) find documents on the
 department shares and decide where new documents belong. It indexes the 5 top-level shares on the
@@ -233,6 +233,20 @@ Notes from implementation:
   go-live checklist. Viewing the guide is not audit-logged, so the privacy notice is unchanged.
 - **Phase 3 hooks:** `services/plan.py` exposes the plan (`entries`, `place`, `guide`) and the
   keywords that `get_folder_plan` / `suggest_destination` and the no-LLM fallback will use.
+
+Phase 2 audit (2026-10-08, BUG-035 to BUG-042):
+- **Tree order:** entries are sorted by path parts, so "Contratos/2024" stays under "Contratos" and not
+  under "Contratos 2024", on SQLite and PostgreSQL alike.
+- **Naming patterns** are matched part by part between the stars (linear time); a pattern with many `*`
+  used to take seconds per file.
+- **Compliance:** each list shows its biggest problems first (folders by files, files by path), the CSV
+  holds all of them, and "correctly named" counts only files under a naming pattern. Folders the scanner
+  couldn't list never make a planned folder look empty or missing.
+- **Browse** only shows a folder-above's guide when the user can list that folder, as the guide does.
+- The progress snapshot (and indexing, dedupe) is queued even when the night's last scan fails.
+- Not changed, worth knowing: plan edits are recorded only as "last changed by" (no history), and deleting
+  the root entry removes a share's whole plan; the nightly `pg_dump` is the way back. Export the plan to
+  CSV before big changes.
 
 ### Phase 3 — Local AI assistant
 

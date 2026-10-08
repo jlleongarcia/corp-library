@@ -115,16 +115,28 @@ def browse(db: Session, token: frozenset[str], folder_id: int) -> dict:
         ],
         "files_hidden": files_hidden,  # can list the folder but not open its files
         "files_truncated": len(files) > MAX_FILES_LISTED,
-        "plan": _placement(db, share, folder),
+        "plan": _placement(db, share, folder, listable),
     }
 
 
-def _placement(db: Session, share: Share, folder: Folder) -> Optional[dict]:
-    """The folder guide for this folder: its plan entry, or the one it falls under."""
+def _placement(db: Session, share: Share, folder: Folder, listable: set[int]) -> Optional[dict]:
+    """
+    The folder guide for this folder: its plan entry, or the one it falls under.
+    That one is a folder above this one, which the user may not be allowed to
+    list; then it stays hidden, as in the folder guide (BUG-041).
+    """
     placed = plan.placement_for_folder(db, share.id, folder.path)
     if placed is None:
         return None
     entry = placed.entry
+    if entry is not None and placed.status != "planned":
+        parts = folder.path.split("/")
+        above = db.scalar(select(Folder.acl_id).where(
+            Folder.share_id == share.id,
+            Folder.path == "/".join(parts[:plan.depth(entry.path)]),
+        ))
+        if above not in listable:
+            entry = None
     return {
         "status": placed.status,
         "entry": plan.entry_dict(entry, share, folder_id=folder.id if placed.status == "planned" else None)

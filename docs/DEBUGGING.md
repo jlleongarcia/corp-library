@@ -59,6 +59,14 @@ Run every check with `cd backend && uv run pytest` (SQLite) and `uv run scripts/
 | [BUG-032](#bug-032) | Low | Download keeps the SMB file open if the browser disconnects early | Before production | ✅ | `test_search.py::test_download_handle_is_closed_even_if_never_read` |
 | [BUG-033](#bug-033) | Medium | No privacy notice for sign-in data and the audit log (GDPR / LOPDGDD) | Before production | ⬜ | Draft notice in code (`test_privacy.py`); pending expert legal review |
 | [BUG-034](#bug-034) | Medium | Google Fonts sends every user's IP address to Google | Before production | ✅ | CI `.github/ci/smoke_test.sh` ("index.html loads nothing from other sites") |
+| [BUG-035](#bug-035) | Medium | Folder plan drawn as the wrong tree when names share a prefix ("Contratos" / "Contratos 2024") | Before production | ✅ | `test_plan.py::test_plan_lists_each_folder_before_its_subfolders` |
+| [BUG-036](#bug-036) | Medium | Compliance lists show an arbitrary 200 problems, not the biggest; the CSV stops at 5,000 | Before production | ✅ | `test_plan.py::test_lists_keep_the_biggest_problems_and_the_csv_keeps_them_all` |
+| [BUG-037](#bug-037) | Medium | A naming pattern with several `*` takes seconds per file (regex backtracking) | Before production | ✅ | `test_plan.py::test_naming_patterns_with_many_stars_stay_fast` |
+| [BUG-038](#bug-038) | Low | Folders the scanner couldn't list make planned folders look empty or missing | Before production | ✅ | `test_plan.py::test_unlisted_folders_are_not_reported_empty_or_missing` |
+| [BUG-039](#bug-039) | Low | "Correctly named" counts files that have no naming rule | Before production | ✅ | `test_plan.py::test_correctly_named_counts_only_files_under_a_naming_pattern` |
+| [BUG-040](#bug-040) | Low | Compliance CSV is a 500 when the share's name has a character outside Latin-1 | Before production | ✅ | `test_plan.py::test_csv_download_name_may_hold_any_character` |
+| [BUG-041](#bug-041) | Low | Browsing shows the guide of a folder above that the user can't list | Before production | ✅ | `test_plan.py::test_browse_hides_the_guide_of_a_folder_above_that_the_user_cannot_list` |
+| [BUG-042](#bug-042) | Low | If the last scan of the night fails, no index, dedupe or progress snapshot follows | Before first real scan | ✅ | `test_plan.py::test_follow_up_jobs_are_queued_even_if_the_last_scan_fails` |
 
 ---
 
@@ -465,6 +473,98 @@ on PCs without internet access.
 - **Fix:** the font is bundled (`@fontsource-variable/inter`); `index.html` references no other site,
   which the smoke test checks.
 - **Files:** `frontend/index.html`, `frontend/src/main.tsx`, `frontend/tailwind.config.js`, `frontend/package.json`
+- **Status:** ✅ Fixed.
+
+### BUG-035
+
+**Folder plan drawn as the wrong tree.** Entries were sorted by path, and `" "`, `-` and `.` sort before `/`:
+"Contratos 2024" came between "Contratos" and "Contratos/2024", so the editor and the guide (which indent
+by depth) showed 2024 under "Contratos 2024". PostgreSQL's collation ignores `/` and spaces, which mixes
+them further. Spanish folder names with spaces made this certain on the real plan.
+
+- **Fix:** `plan.entries()` sorts by the path's parts (`tree_order`), in Python, the same on both databases.
+  The compliance lists use the same order.
+- **Files:** `backend/app/services/plan.py`
+- **Status:** ✅ Fixed.
+
+### BUG-036
+
+**Compliance lists showed an arbitrary 200 problems.** `_Capped` kept the first `limit` items *found*
+(database order) and only sorted those, so "Outside the plan" and "Overgrown", sorted by files, could miss
+the biggest folders. The CSV export asked for `limit=5000`, while the UI said "export for all".
+
+- **Fix:** each list keeps the first `limit` items in its own order (biggest first; files and folders by
+  path) with a bounded heap. The CSV export has no limit.
+- **Files:** `backend/app/services/plan.py`, `backend/app/routers/reports.py`, `frontend/src/pages/admin/ComplianceTab.tsx`
+- **Status:** ✅ Fixed.
+
+### BUG-037
+
+**Naming patterns with several `*` backtracked exponentially.** Each `*` became `.*`; for a name that
+doesn't match, the regex tries every way of splitting it. `* * * * * x` took 1 s on a 240-character name
+with 5 stars, 22 s with 6. The compliance job checks every file under the pattern, so one such pattern
+could keep the worker busy for hours (and the API request for the report time out).
+
+- **Fix:** the parts between stars are matched left to right, each at its earliest place, inside an atomic
+  group (`(?>.*?part)`): the classic glob algorithm, linear. `{N}` is lazy so a part ends as early as it can.
+  Same answers as before on 300,000 random pattern/name pairs.
+- **Files:** `backend/app/services/plan.py`
+- **Status:** ✅ Fixed.
+
+### BUG-038
+
+**Folders the scanner couldn't list made planned folders look empty or missing.** Only the folder's own
+`list_error` was checked (BUG-013's rule): a planned folder whose subfolder couldn't be listed was
+"empty", and a planned folder inside one that couldn't be listed was "not created yet".
+
+- **Fix:** a folder with an unlisted folder anywhere below it is never "empty"; a planned folder is not
+  "missing" when the folder that would hold it couldn't be listed.
+- **Files:** `backend/app/services/plan.py`
+- **Status:** ✅ Fixed.
+
+### BUG-039
+
+**"Correctly named" counted files without a naming rule.** `files_checked` counted every file under a
+naming *or* file-type rule, and the percentage was `(checked − misnamed) / checked`. A share with 1,000
+files under type-only rules and 100 under a pattern, half misnamed, showed 95 % instead of 50 %.
+
+- **Fix:** `files_checked` counts files under a naming pattern only (column meaning changed, no migration:
+  no real snapshots exist yet). Wrong types stay a count of their own.
+- **Files:** `backend/app/services/plan.py`, `backend/app/models.py`
+- **Status:** ✅ Fixed.
+
+### BUG-040
+
+**Compliance CSV was a 500 for some share names.** The file name (`compliance-<share>.csv`) went into
+`Content-Disposition` as is: headers are Latin-1, so a `€` raised, and a `"` broke the header.
+
+- **Fix:** `_attachment()` sends an ASCII fallback plus the real name as `filename*=UTF-8''…` (RFC 6266),
+  for every CSV export.
+- **Files:** `backend/app/routers/reports.py`
+- **Status:** ✅ Fixed.
+
+### BUG-041
+
+**Browsing showed the guide of a folder above that the user can't list.** For a folder that isn't
+planned itself, the browse page shows the entry it falls under (free) or where its files belong (outside).
+That entry is an ancestor folder, which Windows may hide from the user (they reach the folder by traverse
+rights). The guide hides it; browsing showed its purpose, owner and keywords, and linked to a guide entry
+that wasn't there.
+
+- **Fix:** the entry is only returned if the user can list that ancestor; otherwise the panel shows the
+  warning without a link (outside) or nothing (free).
+- **Files:** `backend/app/services/library.py`, `backend/app/services/plan.py`
+- **Status:** ✅ Fixed.
+
+### BUG-042
+
+**If the last scan of the night failed, nothing followed it.** The worker queued principal resolution,
+indexing, dedupe and (from phase 2) the progress snapshot after the last scan of a batch, but only if
+that scan succeeded. One unreachable share scanned last meant a night without them, and a gap in the
+refactor chart.
+
+- **Fix:** the follow-up jobs are queued before a failed scan raises.
+- **Files:** `backend/app/worker.py`
 - **Status:** ✅ Fixed.
 
 ---
