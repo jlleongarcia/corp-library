@@ -7,6 +7,108 @@ export interface User {
   is_admin: boolean
 }
 
+export interface AuthConfig {
+  app_name: string
+  sso_enabled: boolean
+  dev_mode: boolean
+}
+
+// ── Search, browse, documents ─────────────────────────────────────────────────
+
+export interface SnippetSegment {
+  text: string
+  hit: boolean
+}
+
+export interface SearchResult {
+  file_id: number
+  name: string
+  extension: string
+  size: number
+  mtime: string | null
+  share_id: number
+  share: string
+  folder_id: number
+  folder_path: string
+  path: string
+  snippet: SnippetSegment[]
+}
+
+export interface SearchResponse {
+  total: number
+  results: SearchResult[]
+}
+
+export interface Option {
+  key: string
+  label: string
+}
+
+export interface SearchFilters {
+  shares: Option[]
+  types: Option[]
+}
+
+export interface BrowseShare {
+  id: number
+  name: string
+  path: string
+  root_folder_id: number
+}
+
+export interface BrowseResponse {
+  folder: { id: number; name: string; share_id: number; share: string; path: string }
+  breadcrumbs: { folder_id: number | null; name: string }[]
+  folders: { id: number; name: string; mtime: string | null }[]
+  files: { file_id: number; name: string; extension: string; size: number; mtime: string | null }[]
+  files_hidden: boolean
+  files_truncated: boolean
+}
+
+export type IndexStatus =
+  | 'pending' | 'text' | 'ocr' | 'empty' | 'metadata' | 'too_large' | 'ocr_unavailable' | 'error'
+
+export interface DocumentDetail {
+  file_id: number
+  name: string
+  extension: string
+  size: number
+  mtime: string | null
+  ctime: string | null
+  share_id: number
+  share: string
+  folder_id: number
+  folder_path: string
+  path: string
+  index_status: IndexStatus | null
+  preview: 'pdf' | 'image' | null
+  text_excerpt: string | null
+  text_truncated: boolean
+}
+
+// ── Audit ─────────────────────────────────────────────────────────────────────
+
+export interface AuditEvent {
+  id: number
+  at: string
+  username: string | null
+  action: 'sign_in' | 'sign_in_failed' | 'sign_out' | 'search' | 'view' | 'preview' | 'download' | 'denied'
+  file_id: number | null
+  path: string | null
+  detail: Record<string, unknown>
+  client_ip: string | null
+}
+
+export interface AuditLog {
+  total: number
+  events: AuditEvent[]
+}
+
+export interface IndexStatusReport {
+  counts: Partial<Record<IndexStatus | 'not_indexed', number>>
+  ocr_available: boolean
+}
+
 // ── Shares and jobs ───────────────────────────────────────────────────────────
 
 export interface Share {
@@ -21,7 +123,7 @@ export type JobStatus = 'queued' | 'running' | 'done' | 'failed'
 
 export interface Job {
   id: number
-  kind: 'scan' | 'resolve_principals' | 'dedupe'
+  kind: 'scan' | 'resolve_principals' | 'dedupe' | 'index'
   payload: Record<string, unknown>
   status: JobStatus
   requested_by: string | null

@@ -40,28 +40,26 @@ class BrokenDirectory(FakeDirectory):
 
 
 def test_login_and_admin_guard(client):
-    assert client.post("/auth/login", json={"username": "admin", "password": "nope"}).status_code == 401
-    r = client.post("/auth/login", json={"username": "someone", "password": "dev"})
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    assert r.json()["user"]["is_admin"] is False
-    assert client.get("/admin/shares", headers=headers).status_code == 403
     assert client.get("/admin/shares").status_code == 401
+    r = client.post("/auth/login", json={"username": "someone"})
+    assert r.status_code == 200 and r.json()["is_admin"] is False
+    assert client.get("/admin/shares").status_code == 403
 
 
-def test_share_crud_and_scan_request(client, admin_headers, tree):
-    r = client.post("/admin/shares", json={"name": "Finance", "path": str(tree)}, headers=admin_headers)
+def test_share_crud_and_scan_request(client, admin, tree):
+    r = client.post("/admin/shares", json={"name": "Finance", "path": str(tree)})
     assert r.status_code == 201
     share_id = r.json()["id"]
-    assert client.post("/admin/shares", json={"name": "Finance", "path": "x"}, headers=admin_headers).status_code == 409
+    assert client.post("/admin/shares", json={"name": "Finance", "path": "x"}).status_code == 409
 
-    r = client.post("/admin/scans", json={"share_id": share_id}, headers=admin_headers)
+    r = client.post("/admin/scans", json={"share_id": share_id})
     assert r.status_code == 202 and r.json()[0]["kind"] == "scan"
     # Requesting again doesn't queue a duplicate.
-    r2 = client.post("/admin/scans", json={}, headers=admin_headers)
+    r2 = client.post("/admin/scans", json={})
     assert r2.json()[0]["id"] == r.json()[0]["id"]
 
-    assert client.put(f"/admin/shares/{share_id}", json={"enabled": False}, headers=admin_headers).json()["enabled"] is False
-    assert client.delete(f"/admin/shares/{share_id}", headers=admin_headers).status_code == 204
+    assert client.put(f"/admin/shares/{share_id}", json={"enabled": False}).json()["enabled"] is False
+    assert client.delete(f"/admin/shares/{share_id}").status_code == 204
 
 
 def test_job_queue(db):
@@ -88,36 +86,35 @@ def _scanned(engine, tree):  # noqa: F811
         return share.id
 
 
-def test_reports(client, admin_headers, engine, tree):  # noqa: F811
+def test_reports(client, admin, engine, tree):  # noqa: F811
     _scanned(engine, tree)
-    h = admin_headers
 
-    s = client.get("/admin/reports/summary", headers=h).json()
+    s = client.get("/admin/reports/summary").json()
     assert s["shares"][0]["files"] == 5 and s["shares"][0]["last_scan_status"] == "success"
     assert {e["extension"] for e in s["by_extension"]} == {"xlsx", "pdf", "txt"}
     assert sum(b["files"] for b in s["by_age"]) == 5
 
-    d = client.get("/admin/reports/duplicates", headers=h).json()
+    d = client.get("/admin/reports/duplicates").json()
     assert d["total_groups"] == 1 and d["groups"][0]["copies"] == 2
     assert d["groups"][0]["confidence"] == "exact"
 
-    csv = client.get("/admin/reports/duplicates?format=csv", headers=h)
+    csv = client.get("/admin/reports/duplicates?format=csv")
     assert csv.headers["content-type"].startswith("text/csv") and "2025.xlsx" in csv.text
 
-    assert client.get("/admin/reports/stale?years=1", headers=h).json() == []
-    hyg = client.get("/admin/reports/hygiene", headers=h).json()
+    assert client.get("/admin/reports/stale?years=1").json() == []
+    hyg = client.get("/admin/reports/hygiene").json()
     assert hyg["empty_folders"]["count"] == 0
 
-    exc = client.get("/admin/reports/acl-exceptions", headers=h).json()
+    exc = client.get("/admin/reports/acl-exceptions").json()
     paths = {e["path"].replace(str(tree), "<root>") for e in exc}
     assert paths == {"<root>", "<root>\\HR"}  # share root + the folder with its own permissions
     hr = next(e for e in exc if e["path"].endswith("HR"))
     assert hr["inheritance_disabled"] and hr["entries"][0]["name"] == "DEPT-HR"
 
 
-def test_permission_grid(client, admin_headers, engine, tree):  # noqa: F811
+def test_permission_grid(client, admin, engine, tree):  # noqa: F811
     _scanned(engine, tree)
-    grid = client.get("/admin/reports/permissions", headers=admin_headers).json()
+    grid = client.get("/admin/reports/permissions").json()
     cols = {c["path"].replace(str(tree), "<root>"): c["folder_id"] for c in grid["columns"]}
     assert set(cols) == {"<root>", "<root>\\HR"}
     rows = {r["name"]: r["cells"] for r in grid["rows"]}
@@ -126,7 +123,7 @@ def test_permission_grid(client, admin_headers, engine, tree):  # noqa: F811
     assert rows["alice"] == {root: "read", hr: "none"}  # Finance only
     assert rows["bob"] == {root: "read", hr: "read"}  # Finance + HR
 
-    csv = client.get("/admin/reports/permissions?format=csv", headers=admin_headers)
+    csv = client.get("/admin/reports/permissions?format=csv")
     assert csv.status_code == 200 and "Alice" in csv.text
 
 
@@ -172,7 +169,7 @@ def test_group_members_named_without_extra_lookups(db, engine, tree):  # noqa: F
     assert db.get(Principal, ALICE).display_name == "Alice"  # from the member search itself
 
 
-def test_hygiene_reports_unlisted_folders_not_empty(client, admin_headers, engine, tree):  # noqa: F811
+def test_hygiene_reports_unlisted_folders_not_empty(client, admin, engine, tree):  # noqa: F811
     Session = sessionmaker(bind=engine, autoflush=False)
     with Session() as db:
         share = Share(name="Finance", path=str(tree))
@@ -181,9 +178,17 @@ def test_hygiene_reports_unlisted_folders_not_empty(client, admin_headers, engin
         scan_share(db, share, LocalSource(str(tree), sd_provider))
         # Second scan: "Budget/Old" can't be listed. It must not turn up as empty.
         scan_share(db, share, FlakySource(str(tree), "Budget/Old"))
-    hyg = client.get("/admin/reports/hygiene", headers=admin_headers).json()
+    hyg = client.get("/admin/reports/hygiene").json()
     assert hyg["empty_folders"]["count"] == 0
     assert hyg["unlisted_folders"]["count"] == 1
     assert "STATUS_NETWORK_NAME_DELETED" in hyg["unlisted_folders"]["items"][0]["error"]
-    csv = client.get("/admin/reports/hygiene?format=csv", headers=admin_headers)
+    csv = client.get("/admin/reports/hygiene?format=csv")
     assert "could not list" in csv.text
+
+
+# ── BUG-015: pagination parameters are validated ─────────────────────────────
+
+def test_negative_limit_or_offset_is_a_422_not_a_500(client, admin):
+    for url in ("/admin/jobs?limit=-1", "/admin/scan-runs?limit=0", "/admin/reports/duplicates?offset=-5",
+                "/admin/reports/stale?limit=-1", "/admin/reports/audit?offset=-1", "/search?limit=0"):
+        assert client.get(url).status_code == 422, url

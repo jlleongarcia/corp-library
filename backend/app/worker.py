@@ -1,24 +1,26 @@
 """
 Background worker: `python -m app.worker`.
 
-Runs queued jobs (scans, principal resolution, duplicate detection) and
-enqueues the nightly full pipeline at SCAN_HOUR local time.
+Runs queued jobs (scans, principal resolution, indexing, duplicate detection),
+enqueues the nightly full pipeline at SCAN_HOUR local time, and once a day
+removes expired sessions and old audit events.
 """
 
 import logging
 import signal
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from .config import settings
 from .database import SessionLocal
-from .models import Job, Share
-from .services import jobs
+from .models import AuthSession, Job, Share
+from .services import audit, jobs
 from .services.dedupe import run_dedupe
 from .services.directory import open_directory, resolve_principals
+from .services.indexer import run_index
 from .services.scanner import scan_share
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(name)s: %(message)s")
@@ -29,6 +31,9 @@ POLL_SECONDS = 5
 # up within this window; later than that it waits for the next night rather than
 # loading the file server during working hours.
 CATCH_UP = timedelta(hours=4)
+HOUSEKEEPING_EVERY = timedelta(days=1)
+# Content indexing runs after scans and name resolution, before duplicates.
+RESOLVE_PRIORITY, INDEX_PRIORITY, DEDUPE_PRIORITY = 110, 115, 120
 _stop = False
 
 
@@ -48,8 +53,9 @@ def run_job(db, job: Job) -> None:
             raise RuntimeError(run.error_sample or "scan failed")
         # After the last scan of a batch, refresh names/groups and duplicates.
         if jobs.pending_scans(db) <= 1:  # only this job is still running
-            jobs.enqueue(db, jobs.RESOLVE, priority=110)
-            jobs.enqueue(db, jobs.DEDUPE, priority=120)
+            jobs.enqueue(db, jobs.RESOLVE, priority=RESOLVE_PRIORITY)
+            jobs.enqueue(db, jobs.INDEX, priority=INDEX_PRIORITY)
+            jobs.enqueue(db, jobs.DEDUPE, priority=DEDUPE_PRIORITY)
     elif job.kind == jobs.RESOLVE:
         directory = open_directory()
         try:
@@ -57,6 +63,12 @@ def run_job(db, job: Job) -> None:
         finally:
             if directory is not None:
                 directory.close()
+    elif job.kind == jobs.INDEX:
+        deadline = datetime.now(timezone.utc) + timedelta(minutes=settings.extract_job_minutes)
+        stats = run_index(db, deadline=deadline, retry=bool(job.payload.get("retry")))
+        if stats.pending:
+            # Time's up: let queued scans run, then carry on where this one stopped.
+            jobs.enqueue(db, jobs.INDEX, priority=INDEX_PRIORITY + 10)
     elif job.kind == jobs.DEDUPE:
         run_dedupe(db)
     else:
@@ -89,6 +101,15 @@ def maybe_schedule(db, last_scheduled: datetime | None, now: datetime | None = N
     return slot
 
 
+def housekeeping(db) -> None:
+    """Remove expired sessions and audit events older than AUDIT_RETENTION_DAYS."""
+    n = db.execute(delete(AuthSession).where(AuthSession.expires_at < datetime.now(timezone.utc))).rowcount or 0
+    db.commit()
+    if n:
+        logger.info("Removed %d expired session(s).", n)
+    audit.purge_old(db)
+
+
 def main() -> None:
     signal.signal(signal.SIGTERM, _handle_stop)
     signal.signal(signal.SIGINT, _handle_stop)
@@ -103,8 +124,12 @@ def main() -> None:
     else:
         logger.info("Worker started (nightly scan at %02d:00).", settings.scan_hour)
     last_scheduled = None
+    last_housekeeping = None
     while not _stop:
         with SessionLocal() as db:
+            if last_housekeeping is None or datetime.now(timezone.utc) - last_housekeeping >= HOUSEKEEPING_EVERY:
+                housekeeping(db)
+                last_housekeeping = datetime.now(timezone.utc)
             last_scheduled = maybe_schedule(db, last_scheduled)
             job = jobs.claim_next(db)
             if job is None:

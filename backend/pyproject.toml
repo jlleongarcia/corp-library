@@ -1,6 +1,6 @@
 [project]
 name = "corp-library-backend"
-version = "0.2.0"
+version = "0.3.0"
 description = "Corp Library API and background worker"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -11,9 +11,15 @@ dependencies = [
     "alembic>=1.13",
     "pydantic>=2.7",
     "pydantic-settings>=2.4",
-    "python-jose[cryptography]>=3.3",
     "ldap3>=2.9.1",
     "smbprotocol>=1.14",
+    "pypdfium2>=5.14.0",
+    "pillow>=12.3.0",
+]
+
+[project.optional-dependencies]
+sso = [
+    "gssapi>=1.8 ; sys_platform == 'linux'",
 ]
 
 [dependency-groups]

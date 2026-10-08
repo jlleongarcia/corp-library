@@ -16,8 +16,8 @@ from ..models import Job, Share
 
 logger = logging.getLogger(__name__)
 
-SCAN, RESOLVE, DEDUPE = "scan", "resolve_principals", "dedupe"
-KINDS = {SCAN, RESOLVE, DEDUPE}
+SCAN, RESOLVE, DEDUPE, INDEX = "scan", "resolve_principals", "dedupe", "index"
+KINDS = {SCAN, RESOLVE, DEDUPE, INDEX}
 
 
 def enqueue(
@@ -38,7 +38,7 @@ def enqueue(
 
 
 def enqueue_full_pipeline(db: Session, requested_by: Optional[str] = None) -> list[Job]:
-    """Scan every enabled share; the last scan queues principal resolution and dedupe."""
+    """Scan every enabled share; the last scan queues principal resolution, indexing and dedupe."""
     jobs = [
         enqueue(db, SCAN, {"share_id": sid}, requested_by)
         for sid in db.scalars(select(Share.id).where(Share.enabled).order_by(Share.id))

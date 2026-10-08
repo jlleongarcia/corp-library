@@ -1,32 +1,31 @@
-import logging
-from datetime import datetime, timezone
+"""
+Sign-in. Two ways in, same result (a session cookie with the user's groups):
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+- GET /auth/sso: Kerberos. The browser of a domain PC answers the
+  `WWW-Authenticate: Negotiate` challenge with a ticket, without the user typing anything.
+- POST /auth/login: the sign-in form (LDAP bind as the user), the fallback when
+  SSO isn't available on a PC. In DEV_MODE, any username without a password.
+"""
+
+import base64
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
-from ..auth.jwt import CurrentUser, create_access_token, get_current_user, is_admin_user
-from ..auth.ldap_client import authenticate_ldap
-from ..config import settings
+from ..auth import kerberos
+from ..auth.dev import dev_identity
+from ..auth.ldap_client import DirectoryUnavailable, authenticate_ldap, lookup_user
+from ..auth.sessions import CurrentUser, end_session, get_current_user, start_session
+from ..config import dev_mode_problem, settings
 from ..database import get_db
-from ..models import User
-from ..schemas import LoginRequest, TokenResponse, UserPublic
+from ..schemas import AuthConfig, LoginRequest, UserPublic
+from ..services import audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
 
-
-def _upsert_user(db: Session, user: CurrentUser) -> None:
-    row = db.scalar(select(User).where(User.username == user.username))
-    if row is None:
-        row = User(username=user.username)
-        db.add(row)
-    row.display_name = user.display_name
-    row.email = user.email
-    row.sid = user.sid
-    row.is_admin = user.is_admin
-    row.last_login = datetime.now(timezone.utc)
-    db.commit()
+DIRECTORY_DOWN = "Active Directory can't be reached right now. Please try again in a few minutes."
 
 
 def _public(user: CurrentUser) -> UserPublic:
@@ -35,29 +34,73 @@ def _public(user: CurrentUser) -> UserPublic:
     )
 
 
-@router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+@router.get("/config", response_model=AuthConfig)
+def config():
+    return AuthConfig(app_name=settings.app_name, sso_enabled=settings.sso_enabled, dev_mode=settings.dev_mode)
+
+
+@router.get("/sso", response_model=UserPublic)
+def sso(request: Request, response: Response, db: Session = Depends(get_db)):
+    if not settings.sso_enabled:
+        raise HTTPException(status_code=404, detail="Single sign-on is not configured")
+    header = request.headers.get("authorization")
+    if not header:
+        # The challenge: a browser that trusts this site retries with a Kerberos ticket.
+        raise HTTPException(status_code=401, detail="Negotiate", headers={"WWW-Authenticate": "Negotiate"})
+    try:
+        result = kerberos.authenticate(header)
+    except kerberos.SsoError as exc:
+        # 403, not 401: a second challenge would only make the browser try again.
+        audit.record(db, "sign_in_failed", None, request, method="sso", reason=str(exc)[:200])
+        raise HTTPException(status_code=403, detail="Single sign-on failed")
+
+    try:
+        who = lookup_user(result.username)
+    except DirectoryUnavailable:
+        raise HTTPException(status_code=503, detail=DIRECTORY_DOWN)
+    if who is None:
+        audit.record(db, "sign_in_failed", result.username, request, method="sso", reason="account not found or disabled")
+        raise HTTPException(status_code=403, detail="Your account was not found in Active Directory")
+
+    user = start_session(db, request, response, who, "sso")
+    audit.record(db, "sign_in", user.username, request, method="sso")
+    if result.reply_token:
+        response.headers["WWW-Authenticate"] = "Negotiate " + base64.b64encode(result.reply_token).decode()
+    return _public(user)
+
+
+@router.post("/login", response_model=UserPublic)
+def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     username = payload.username.strip().lower()
     invalid = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     if settings.dev_mode:
-        if settings.ldap_server:
-            raise HTTPException(status_code=500, detail="DEV_MODE must not be enabled when LDAP is configured")
-        if not username or payload.password != settings.dev_password:
-            raise invalid
-        user = CurrentUser(username, username, "", is_admin_user(username))
+        # Checked at startup too; repeated here so no code path can skip it.
+        if problem := dev_mode_problem(settings):
+            raise HTTPException(status_code=500, detail=problem)
+        who = dev_identity(username)
+        method = "dev"
     else:
-        ldap_user = authenticate_ldap(username, payload.password)
-        if not ldap_user:
+        try:
+            who = authenticate_ldap(username, payload.password)
+        except DirectoryUnavailable:
+            raise HTTPException(status_code=503, detail=DIRECTORY_DOWN)
+        if who is None:
+            audit.record(db, "sign_in_failed", username, request, method="ldap")
             raise invalid
-        # The account AD resolved, not the typed text, is the identity (and decides admin rights).
-        user = CurrentUser(
-            ldap_user.username, ldap_user.display_name, ldap_user.email,
-            is_admin_user(ldap_user.username), ldap_user.sid,
-        )
+        method = "ldap"
 
-    _upsert_user(db, user)
-    return TokenResponse(access_token=create_access_token(user), user=_public(user))
+    # The account AD resolved, not the typed text, is the identity (and decides admin rights).
+    user = start_session(db, request, response, who, method)
+    audit.record(db, "sign_in", user.username, request, method=method)
+    return _public(user)
+
+
+@router.post("/logout", status_code=204)
+def logout(request: Request, response: Response, db: Session = Depends(get_db),
+           user: CurrentUser = Depends(get_current_user)):
+    audit.record(db, "sign_out", user.username, request)
+    end_session(db, request, response)
 
 
 @router.get("/me", response_model=UserPublic)

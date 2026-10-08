@@ -1,6 +1,6 @@
 import api from './api'
 
-/** Download an authenticated CSV export (the token travels in the request header, not the URL). */
+/** Download a CSV export: fetched with axios so a failure can be shown instead of an error page. */
 export async function downloadCsv(path: string, params: Record<string, unknown> = {}) {
   const res = await api.get(path, { params: { ...params, format: 'csv' }, responseType: 'blob', timeout: 300_000 })
   const disposition: string = res.headers['content-disposition'] ?? ''

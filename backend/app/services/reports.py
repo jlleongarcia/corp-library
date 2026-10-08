@@ -20,7 +20,7 @@ def _share_filter(stmt, column, share_id: Optional[int]):
     return stmt.where(column == share_id) if share_id else stmt
 
 
-def _display_path(share_path: str, folder_path: str, name: str = "") -> str:
+def display_path(share_path: str, folder_path: str, name: str = "") -> str:
     parts = [share_path.rstrip("\\/")]
     if folder_path:
         parts.append(folder_path.replace("/", "\\"))
@@ -113,7 +113,7 @@ def duplicates(db: Session, limit: int = 50, offset: int = 0) -> dict:
         out.append({
             "size": size, "copies": copies, "wasted_bytes": size * (copies - 1),
             "confidence": "exact" if exact else "probable",
-            "files": [{"path": _display_path(sp, fp, n), "mtime": m} for sp, fp, n, m in files],
+            "files": [{"path": display_path(sp, fp, n), "mtime": m} for sp, fp, n, m in files],
         })
     return {"total_groups": total[0], "total_wasted_bytes": int(total[1]), "groups": out}
 
@@ -130,7 +130,7 @@ def stale_folders(db: Session, years: int = 5, share_id: Optional[int] = None, l
     stmt = _share_filter(stmt, File.share_id, share_id)
     stmt = stmt.group_by(Share.path, Folder.path).order_by(func.sum(File.size).desc()).limit(limit)
     return [
-        {"folder": _display_path(sp, fp), "stale_files": n, "stale_bytes": int(b or 0), "newest_stale": newest}
+        {"folder": display_path(sp, fp), "stale_files": n, "stale_bytes": int(b or 0), "newest_stale": newest}
         for sp, fp, n, b, newest in db.execute(stmt)
     ]
 
@@ -181,13 +181,13 @@ def hygiene(db: Session, share_id: Optional[int] = None, limit: int = 200) -> di
 
     return {
         "long_paths": {"limit": LONG_PATH_LIMIT, "count": long_count, "items": [
-            {"path": _display_path(sp, fp, n), "length": ln} for sp, fp, n, ln in long_rows]},
+            {"path": display_path(sp, fp, n), "length": ln} for sp, fp, n, ln in long_rows]},
         "deep_folders": {"limit": DEEP_FOLDER_LIMIT, "count": deep_count, "items": [
-            {"path": _display_path(sp, fp), "depth": d} for sp, fp, d in deep_rows]},
+            {"path": display_path(sp, fp), "depth": d} for sp, fp, d in deep_rows]},
         "empty_folders": {"count": empty_count, "items": [
-            {"path": _display_path(sp, fp)} for sp, fp in empty_rows]},
+            {"path": display_path(sp, fp)} for sp, fp in empty_rows]},
         "unlisted_folders": {"count": unlisted_count, "items": [
-            {"path": _display_path(sp, fp), "error": err} for sp, fp, err in unlisted_rows]},
+            {"path": display_path(sp, fp), "error": err} for sp, fp, err in unlisted_rows]},
     }
 
 
@@ -235,7 +235,7 @@ def acl_exceptions(db: Session, share_id: Optional[int] = None, limit: int = 500
                 })
         out.append({
             "folder_id": folder.id,
-            "path": _display_path(share_path, folder.path),
+            "path": display_path(share_path, folder.path),
             "is_share_root": folder.parent_id is None,
             "inheritance_disabled": bool(acl and acl.is_protected),
             "null_dacl": bool(acl and acl.is_null_dacl),
@@ -262,7 +262,7 @@ def permission_grid(db: Session, max_depth: int = 2, max_columns: int = 60) -> d
     columns = []
     acl_by_col: dict[int, list[AclEntry]] = {}
     for folder, share_path in db.execute(col_q):
-        columns.append({"folder_id": folder.id, "path": _display_path(share_path, folder.path)})
+        columns.append({"folder_id": folder.id, "path": display_path(share_path, folder.path)})
         acl_by_col[folder.id] = [e for e in folder.acl.entries if not e.flags & INHERIT_ONLY_ACE]
 
     # Candidate rows: users named directly in an ACE, users in groups named in an ACE,

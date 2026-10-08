@@ -5,13 +5,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..auth.jwt import CurrentUser, require_admin
+from ..auth.sessions import CurrentUser, require_admin
 from ..database import get_db
 from ..models import Job, ScanRun, Share
 from ..schemas import (
     JobPublic, ScanRequest, ScanRunPublic, ShareCreate, SharePublic, ShareUpdate,
 )
-from ..services import jobs
+from ..services import indexer, jobs
+from ..services.extract import tesseract_available
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -75,21 +76,30 @@ def request_scan(
 
 
 @router.post("/jobs/{kind}", response_model=JobPublic, status_code=202)
-def request_job(kind: str, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
-    if kind not in (jobs.RESOLVE, jobs.DEDUPE):
+def request_job(
+    kind: str, retry: bool = False, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)
+):
+    """resolve_principals (forced refresh), dedupe, or index (`retry=true` re-reads failed files)."""
+    if kind not in (jobs.RESOLVE, jobs.DEDUPE, jobs.INDEX):
         raise HTTPException(status_code=400, detail=f"Unknown job kind: {kind}")
-    payload = {"force": True} if kind == jobs.RESOLVE else {}
+    payload = {"force": True} if kind == jobs.RESOLVE else {"retry": True} if kind == jobs.INDEX and retry else {}
     return jobs.enqueue(db, kind, payload, requested_by=user.username)
 
 
+@router.get("/index-status")
+def index_status(db: Session = Depends(get_db)):
+    """Files per extraction status: how much of the content is searchable."""
+    return {"counts": indexer.status_counts(db), "ocr_available": tesseract_available()}
+
+
 @router.get("/jobs", response_model=list[JobPublic])
-def list_jobs(limit: int = Query(50, le=500), db: Session = Depends(get_db)):
+def list_jobs(limit: int = Query(50, ge=1, le=500), db: Session = Depends(get_db)):
     return db.scalars(select(Job).order_by(Job.id.desc()).limit(limit)).all()
 
 
 @router.get("/scan-runs", response_model=list[ScanRunPublic])
 def list_scan_runs(
-    share_id: Optional[int] = None, limit: int = Query(50, le=500), db: Session = Depends(get_db)
+    share_id: Optional[int] = None, limit: int = Query(50, ge=1, le=500), db: Session = Depends(get_db)
 ):
     stmt = select(ScanRun).order_by(ScanRun.id.desc()).limit(limit)
     if share_id:

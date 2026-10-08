@@ -4,9 +4,12 @@ import os
 os.environ.update({
     "DATABASE_URL": "sqlite://",
     "DEV_MODE": "true",
-    "DEV_PASSWORD": "dev",
+    "DEV_GROUPS": "",
     "ADMIN_USERS": "admin",
     "LDAP_SERVER": "",
+    "KERBEROS_KEYTAB": "",
+    "COOKIE_SECURE": "false",  # the test client talks plain http
+    "OCR_ENABLED": "false",  # tests that need OCR fake it
     "SCAN_HOUR": "-1",
     "DEDUPE_MIN_SIZE": "1",
 })
@@ -30,6 +33,15 @@ def migrate(engine) -> None:
     with engine.begin() as conn:
         cfg.attributes["connection"] = conn
         command.upgrade(cfg, "head")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_process_state():
+    # Module-level caches outlive a test's database; ids are reused by the next one.
+    from app.auth import sessions
+
+    sessions._refresh_failed_at.clear()
+    yield
 
 
 @pytest.fixture
@@ -64,13 +76,19 @@ def client(engine):
             yield s
 
     app.dependency_overrides[get_db] = _get_db
-    with TestClient(app) as c:
+    # Like the frontend: every request carries the CSRF header.
+    with TestClient(app, headers={"X-Requested-With": "XMLHttpRequest"}) as c:
         yield c
     app.dependency_overrides.clear()
 
 
-@pytest.fixture
-def admin_headers(client):
-    r = client.post("/auth/login", json={"username": "admin", "password": "dev"})
+def sign_in(client, username: str) -> dict:
+    """DEV_MODE sign-in; the session cookie stays in the client."""
+    r = client.post("/auth/login", json={"username": username})
     assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+    return r.json()
+
+
+@pytest.fixture
+def admin(client):
+    return sign_in(client, "admin")

@@ -5,8 +5,9 @@ Run the backend locally without Docker:
 
 Starts a local PostgreSQL (data kept in backend/.devdata/), applies the
 migrations, then runs the API on http://127.0.0.1:8000 (auto-reload) and the
-worker. Settings come from the repo-root .env; use DEV_MODE=true to log in
-without Active Directory. Ctrl+C stops everything.
+worker. Settings come from the repo-root .env; use DEV_MODE=true to sign in
+without Active Directory (any username, no password; DEV_GROUPS gives fake
+groups). Ctrl+C stops everything.
 
 PostgreSQL binaries come from the `pgserver` package (dev dependency), but the
 server is managed here: it runs detached from the console so Ctrl+C can't kill
@@ -115,7 +116,10 @@ def main() -> int:
     if not ROOT_ENV.exists():
         print(f"Note: {ROOT_ENV} not found; using defaults. Copy .env.example and set DEV_MODE=true.")
     if not settings.dev_mode and not settings.ldap_server:
-        print("Warning: DEV_MODE is off and LDAP isn't configured, so nobody can log in.")
+        print("Warning: DEV_MODE is off and LDAP isn't configured, so nobody can sign in.")
+    if settings.dev_mode and settings.ldap_server:
+        print("Error: DEV_MODE=true needs LDAP_SERVER empty (the API would refuse to start).")
+        return 1
 
     DEVDATA.mkdir(exist_ok=True)
     start_postgres()
@@ -124,7 +128,8 @@ def main() -> int:
         ensure_database()
         url = f"postgresql+psycopg://{PG_USER}@127.0.0.1:{PG_PORT}/{DB_NAME}"
         # The environment wins over .env, so this points the app at the local database.
-        env = dict(os.environ, DATABASE_URL=url, PYTHONUNBUFFERED="1")
+        # The UI is served over plain http on localhost, so the session cookie can't be Secure.
+        env = dict(os.environ, DATABASE_URL=url, PYTHONUNBUFFERED="1", COOKIE_SECURE="false")
         py = sys.executable
         subprocess.run([py, "-m", "alembic", "upgrade", "head"], cwd=BACKEND, env=env, check=True)
 

@@ -2,12 +2,15 @@
 #
 #   (start the traefik-proxy project first; it owns ports 80/443)
 #   cp .env.example .env   # then fill in the values
-#   docker compose up -d --build
+#   docker compose pull && docker compose up -d
 #
 # Every service restarts automatically, including after a server reboot.
 
 x-backend-env: &backend-env
   DATABASE_URL: postgresql+psycopg://corplib:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/corplib
+  # Never send container-to-container traffic (healthchecks included) to a corporate proxy.
+  NO_PROXY: localhost,127.0.0.1,api,db
+  no_proxy: localhost,127.0.0.1,api,db
 
 services:
   db:
@@ -33,6 +36,7 @@ services:
     environment: *backend-env
     volumes:
       - ./certs:/certs:ro  # internal CA for LDAPS (LDAP_CA_CERT_FILE)
+      - ./secrets:/secrets:ro  # Kerberos keytab for SSO (KERBEROS_KEYTAB), readable by uid 10001
     depends_on:
       db:
         condition: service_healthy
@@ -57,7 +61,7 @@ services:
         condition: service_healthy  # the API runs migrations first
 
   web:
-    image: ghcr.io/jlleongarcia/corp-library-api:latest
+    image: ghcr.io/jlleongarcia/corp-library-web:latest
     restart: unless-stopped
     # No published ports: the shared Traefik proxy (traefik-proxy project) terminates
     # HTTPS on 443 and routes APP_HOST here over the `proxy` network.

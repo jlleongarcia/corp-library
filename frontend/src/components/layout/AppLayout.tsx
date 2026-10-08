@@ -1,10 +1,18 @@
-import { Outlet, Navigate } from 'react-router-dom'
+import { Outlet, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
+import { Spinner } from '../ui'
 import Header from './Header'
 
 export default function AppLayout() {
-  const { user } = useAuth()
-  if (!user) return <Navigate to="/login" replace />
+  const { status } = useAuth()
+  const location = useLocation()
+  if (status === 'loading') {
+    return <div className="min-h-screen flex items-center justify-center"><Spinner /></div>
+  }
+  if (status === 'signed-out') {
+    // Come back to the same page (e.g. a shared document link) after signing in.
+    return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">

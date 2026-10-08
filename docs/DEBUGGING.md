@@ -25,26 +25,26 @@ Run every check with `cd backend && uv run pytest` (SQLite) and `uv run scripts/
 
 | ID | Severity | Bug | Due | Status | Check |
 | --- | --- | --- | --- | --- | --- |
-| [BUG-001](#bug-001) | Critical | `web` service runs the API image | Before production | ⬜ | — |
-| [BUG-002](#bug-002) | Critical | Default `SECRET_KEY` lets anyone mint admin tokens | Before first real scan | ✅ | `test_hardening.py::test_weak_secret_keys_are_rejected` |
+| [BUG-001](#bug-001) | Critical | `web` service runs the API image | Before production | 🟡 | First `docker compose up` on the server |
+| [BUG-002](#bug-002) | Critical | Default `SECRET_KEY` lets anyone mint admin tokens | Before first real scan | ✅ | `test_hardening.py::test_unknown_or_forged_session_cookie_is_rejected` and 3 more |
 | [BUG-003](#bug-003) | Critical | LDAPS doesn't validate the DC certificate | Before first real scan | 🟡 | `test_hardening.py::test_ldaps_always_validates_the_certificate` + first real sign-in |
 | [BUG-004](#bug-004) | High | SMB session never re-authenticates after a dropped connection | Before first real scan | 🟡 | `test_hardening.py::test_smb_credentials_become_the_client_default` + real scan |
 | [BUG-005](#bug-005) | High | Reparse-point files (dedup / cloud-tiered) silently skipped | Before first real scan | 🟡 | `test_scanner.py::test_reparse_folders_skipped_but_reparse_files_indexed` + IT answer |
 | [BUG-006](#bug-006) | High | Share-level permissions ignored | Now (ask IT) | ⬜ | IT answer in ROADMAP open questions |
-| [BUG-007](#bug-007) | High | File access taken from the folder's own ACEs | Now | ✅ | `test_acl.py::test_this_folder_only_lets_users_list_but_not_open_files` and 3 more |
+| [BUG-007](#bug-007) | High | File access taken from the folder's own ACEs | Now | ✅ | `test_acl.py::test_this_folder_only_lets_users_list_but_not_open_files` and 3 more; `test_search.py::test_search_shows_each_user_only_what_windows_lets_them_open` |
 | [BUG-008](#bug-008) | High | Nightly scan skipped if the worker is busy at `SCAN_HOUR` | Before first real scan | ✅ | `test_hardening.py::test_nightly_scan_catches_up_after_a_long_job` |
 | [BUG-009](#bug-009) | High | Transient LDAP error marks known users/groups "unknown" | Before first real scan | ✅ | `test_api.py::test_ldap_outage_keeps_known_principals` and 2 more |
 | [BUG-010](#bug-010) | Medium | Login identity is the typed username; LDAP filter not escaped | Before first real scan | ✅ | `test_hardening.py::test_login_identity_is_the_account_ad_returns` and 2 more |
-| [BUG-011](#bug-011) | Medium | nginx drops security headers on `index.html` | Before production | ⬜ | — |
-| [BUG-012](#bug-012) | Medium | CSV exports open to formula injection in Excel | Before production | ⬜ | — |
+| [BUG-011](#bug-011) | Medium | nginx drops security headers on `index.html` | Before production | 🟡 | `curl -I https://<APP_HOST>/` on the server |
+| [BUG-012](#bug-012) | Medium | CSV exports open to formula injection in Excel | Before production | ✅ | `test_search.py::test_searches_views_and_downloads_are_audited` |
 | [BUG-013](#bug-013) | Medium | Unreachable share = "partial"; unlisted folders reported "empty" | Before first real scan | ✅ | `test_scanner.py::test_unreachable_share_fails_the_run`, `test_api.py::test_hygiene_reports_unlisted_folders_not_empty` |
-| [BUG-014](#bug-014) | Low | Scan ignore list is case-sensitive | Before production | ⬜ | — |
-| [BUG-015](#bug-015) | Low | Negative `limit`/`offset` returns 500 | Before production | ⬜ | — |
+| [BUG-014](#bug-014) | Low | Scan ignore list is case-sensitive | Before production | ✅ | `test_hardening.py::test_scan_ignore_list_ignores_case` |
+| [BUG-015](#bug-015) | Low | Negative `limit`/`offset` returns 500 | Before production | ✅ | `test_api.py::test_negative_limit_or_offset_is_a_422_not_a_500` |
 | [BUG-016](#bug-016) | Low | Wrong password reloads the login page, erasing the error | Now | ✅ | Manual: wrong password shows the message (no frontend test suite yet) |
-| [BUG-017](#bug-017) | Low | DEV_MODE guard only checks `LDAP_SERVER` | Before production | ⬜ | — |
-| [BUG-018](#bug-018) | Low | Healthchecks may go through the corporate proxy | Before production | ⬜ | — |
+| [BUG-017](#bug-017) | Low | DEV_MODE guard only checks `LDAP_SERVER` | Before production | ✅ | `test_hardening.py::test_dev_mode_is_refused_outside_a_developer_pc` and 1 more |
+| [BUG-018](#bug-018) | Low | Healthchecks may go through the corporate proxy | Before production | 🟡 | `api` turns healthy on the server |
 | [BUG-019](#bug-019) | Low | Two workers would scan the same share concurrently | Before production | ⬜ | — |
-| [BUG-020](#bug-020) | Low | Compose header says `up -d --build` but nothing builds | Before production | ⬜ | — |
+| [BUG-020](#bug-020) | Low | Compose header says `up -d --build` but nothing builds | Before production | ✅ | Comment only |
 
 ---
 
@@ -55,8 +55,9 @@ Run every check with `cd backend && uv run pytest` (SQLite) and `uv run scripts/
 **`web` service runs the API image.** `docker-compose.yml` used `corp-library-api:latest` for `web`. That
 image runs uvicorn on 8000; Traefik routes to port 80, so every request would get a 502.
 
-- **Fix (to apply):** `image: ghcr.io/jlleongarcia/corp-library-web:latest`.
-- **Status:** ⬜ Open. Deferred: images aren't published yet (`PUBLISH_IMAGES` off).
+- **Fix:** `image: ghcr.io/jlleongarcia/corp-library-web:latest`.
+- **Files:** `docker-compose.yml`
+- **Status:** 🟡 Fixed in code. Confirm with the first deployment (images aren't published yet).
 
 ### BUG-002
 
@@ -64,10 +65,11 @@ image runs uvicorn on 8000; Traefik routes to port 80, so every request would ge
 rights come from the username inside the token. The code default and `.env.example`'s `change-me` are
 public, as is the admin username.
 
-- **Fix:** `config.secret_key_problem()` rejects empty/placeholder keys and keys under 32 characters;
-  `main.py` refuses to start the API with one unless `DEV_MODE=true`. Documented in `.env.example` and
-  the DEPLOYMENT troubleshooting table.
-- **Files:** `backend/app/config.py`, `backend/app/main.py`, `.env.example`, `docs/DEPLOYMENT.md`
+- **Fix (phase 0):** `config.secret_key_problem()` rejected weak keys and `main.py` refused to start with one.
+- **Fix (phase 1, replaces it):** JWTs are gone. A session is a random token in an HttpOnly cookie, looked
+  up in the `sessions` table (only its SHA-256 is stored). Nothing is signed, so there is no key to leak,
+  and sign-out deletes the row. `SECRET_KEY` is no longer read.
+- **Files:** `backend/app/auth/sessions.py`, `backend/app/routers/auth.py`, `backend/app/config.py`, `.env.example`
 - **Status:** ✅ Fixed.
 
 ### BUG-003
@@ -135,7 +137,7 @@ that folder.
   filter files with `can_read_files`. The permission grid still shows folder access, which is what it
   means.
 - **Files:** `backend/app/acl/evaluate.py`, `docs/ROADMAP.md`
-- **Status:** ✅ Fixed. Phase 1 must use it (nothing filters files yet).
+- **Status:** ✅ Fixed. Phase 1 search, browse and documents filter files with it (`services/access.py`).
 
 ### BUG-008
 
@@ -179,17 +181,20 @@ filter.
 **nginx drops security headers on `index.html`.** Any `add_header` in a `location` stops inheritance of
 the server-level ones: `location /` loses `X-Frame-Options`, `nosniff` and `Referrer-Policy`.
 
-- **Fix (to apply):** repeat the headers in each location, or move them to a snippet included by each.
-- **Status:** ⬜ Open.
+- **Fix:** the headers live in `frontend/security-headers.conf`, included by the server and every
+  location. `X-Frame-Options` is now `SAMEORIGIN` (the document page frames PDF previews).
+- **Files:** `frontend/nginx.conf`, `frontend/security-headers.conf`, `frontend/Dockerfile`
+- **Status:** 🟡 Fixed in code; no Docker on the dev PC to run nginx. Confirm with `curl -I` on the server.
 
 ### BUG-012
 
 **CSV formula injection.** Anyone can name a file `=HYPERLINK(...).docx`; exported to CSV and opened in
 Excel, it's evaluated as a formula.
 
-- **Fix (to apply):** in `routers/reports.py::_csv`, prefix string cells starting with `= + - @` (and tab /
-  CR) with `'`.
-- **Status:** ⬜ Open.
+- **Fix:** `routers/reports.py::_cell` prefixes string cells starting with `= + - @`, tab or CR with `'`.
+  It matters more now: the audit export contains search text typed by any user.
+- **Files:** `backend/app/routers/reports.py`
+- **Status:** ✅ Fixed.
 
 ### BUG-013
 
@@ -210,15 +215,17 @@ no children in the database and showed up as *empty* in the hygiene report.
 **Scan ignore list is case-sensitive.** `THUMBS.DB` or `Desktop.ini` variants get indexed; Windows names
 are case-insensitive.
 
-- **Fix (to apply):** compare with `casefold()` in `scanner._ignored`.
-- **Status:** ⬜ Open.
+- **Fix:** `scanner._ignored` compares with `casefold()`.
+- **Files:** `backend/app/services/scanner.py`
+- **Status:** ✅ Fixed.
 
 ### BUG-015
 
 **Negative `limit`/`offset` returns 500.** PostgreSQL rejects negative `LIMIT`/`OFFSET`.
 
-- **Fix (to apply):** `Query(..., ge=0)` (`ge=1` for `limit`) in `routers/admin.py` and `routers/reports.py`.
-- **Status:** ⬜ Open.
+- **Fix:** `ge=1` on every `limit`, `ge=0` on every `offset` (admin, reports, search, audit): FastAPI answers 422.
+- **Files:** `backend/app/routers/admin.py`, `backend/app/routers/reports.py`, `backend/app/routers/library.py`
+- **Status:** ✅ Fixed.
 
 ### BUG-016
 
@@ -234,9 +241,13 @@ login request itself, erasing the form's error message.
 **DEV_MODE guard only checks `LDAP_SERVER`.** With `DEV_MODE=true` and LDAP empty in production, anyone
 signs in as admin with the dev password.
 
-- **Fix (to apply, phase 1 per ROADMAP):** dev identity without passwords, impossible to enable in
-  production (e.g. refuse when `APP_HOST` is set or bind only to localhost).
-- **Status:** ⬜ Open.
+- **Fix:** `config.dev_mode_problem()` refuses DEV_MODE when `LDAP_SERVER` or `KERBEROS_KEYTAB` is set,
+  or the database isn't on localhost (production's is always the `db` container). `main.py` won't start
+  the API, and the login handler checks again. The dev identity takes no password (`DEV_PASSWORD` is
+  gone) and gets fake groups from `DEV_GROUPS`. (`APP_HOST` wasn't used as the signal: a developer's
+  `.env` copied from the example has it set.)
+- **Files:** `backend/app/config.py`, `backend/app/main.py`, `backend/app/routers/auth.py`, `backend/app/auth/dev.py`
+- **Status:** ✅ Fixed.
 
 ### BUG-018
 
@@ -244,8 +255,9 @@ signs in as admin with the dev password.
 `urllib` in the API healthcheck would send `http://localhost:8000` to the proxy, keeping `api` unhealthy
 and `worker` from starting.
 
-- **Fix (to apply):** `NO_PROXY=localhost,127.0.0.1,api,db` in the backend environment.
-- **Status:** ⬜ Open.
+- **Fix:** `NO_PROXY` / `no_proxy` = `localhost,127.0.0.1,api,db` in the backend environment.
+- **Files:** `docker-compose.yml`
+- **Status:** 🟡 Fixed in code. Confirm `api` becomes healthy on the server.
 
 ### BUG-019
 
@@ -260,8 +272,8 @@ the unique constraints.
 
 **Compose header says `docker compose up -d --build`,** but images come from ghcr.io; nothing builds.
 
-- **Fix (to apply):** change the comment to `docker compose pull && docker compose up -d`.
-- **Status:** ⬜ Open.
+- **Fix:** the comment says `docker compose pull && docker compose up -d`.
+- **Status:** ✅ Fixed.
 
 ---
 

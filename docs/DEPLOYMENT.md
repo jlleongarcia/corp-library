@@ -10,6 +10,8 @@ How to deploy, run and recover Corp Library on the department Linux server.
 - A DNS **A record** for the app's hostname (`APP_HOST`) pointing to the server
 - From IT (see the IT requirements doc): the read-only scanner account, LDAP access, and firewall
   rules from the server to the file server (TCP 445) and domain controllers (TCP 636/389, 88)
+- For single sign-on (optional at first; the sign-in form works without it): the SPN and keytab, the
+  intranet-zone GPO and the proxy bypass. See [Single sign-on](#single-sign-on-kerberos) below
 
 ## How images get to the server
 
@@ -40,8 +42,9 @@ if it ever becomes private, run once on the server
 ```bash
 git clone https://github.com/jlleongarcia/corp-library.git && cd corp-library
 cp .env.example .env
-nano .env        # set APP_HOST, SECRET_KEY, POSTGRES_PASSWORD, ADMIN_USERS, LDAP_*, SMB_*
+nano .env        # set APP_HOST, POSTGRES_PASSWORD, ADMIN_USERS, LDAP_*, SMB_*
 mkdir -p certs && cp /path/to/internal-ca.pem certs/   # CA that signed the DCs' LDAPS certificates
+mkdir -p secrets  # the Kerberos keytab goes here once IT provides it (see below)
 docker compose pull
 docker compose up -d
 docker compose ps            # all services "running", api "healthy"
@@ -52,11 +55,42 @@ Then open `https://<APP_HOST>/`, sign in with your Windows account (you must be 
 1. **Shares → Add share**: one per department share, e.g. `\\fileserver\Finance`.
 2. **Shares → Scan all**. Follow progress in **Scan activity**. The first scan of ~2 TB walks every
    folder over SMB; expect anywhere from tens of minutes to a few hours depending on file count.
-3. After the scans, the worker automatically resolves users/groups and looks for duplicates.
-   Duplicate detection reads file contents (only for files whose size matches another file), so it
-   takes longer than the scan.
+3. After the scans, the worker automatically resolves users/groups, **indexes the documents for search**
+   and looks for duplicates. Indexing first makes every file findable by name and folder (minutes), then
+   reads the text of Office, PDF and text files, with OCR for scanned PDFs. On 2 TB that second part
+   takes many hours. It works in 20-minute rounds (`EXTRACT_JOB_MINUTES`), so the nightly scan is never
+   held up, and search improves as it goes. Progress: **Scan activity → Search index**.
 
 From then on everything runs nightly at `SCAN_HOUR` (default 02:00).
+
+### Single sign-on (Kerberos)
+
+Without it, people sign in with the form (Windows username and password) and stay signed in for
+`SESSION_DAYS`. With it, domain PCs sign in without typing anything. What IT does:
+
+1. **SPN** on a service account (the scanner account works):
+   `setspn -S HTTP/<APP_HOST> svc-corplib-scan`. `APP_HOST` must be a DNS **A** record, not a CNAME:
+   browsers ask for a ticket for the name the CNAME points to.
+2. **Keytab** for that SPN (AES256), e.g.
+   `ktpass /princ HTTP/<APP_HOST>@COMPANY.COM /mapuser svc-corplib-scan /crypto AES256-SHA1 /ptype KRB5_NT_PRINCIPAL /pass * /out http.keytab`.
+   Careful: `ktpass` with `/pass` resets that account's password. Agree with IT whether to use a
+   dedicated account instead.
+3. **GPO**: `https://<APP_HOST>` in the Local Intranet zone, or Chrome/Edge's `AuthServerAllowlist`
+   policy, so browsers send tickets to it.
+4. **Proxy bypass** for `<APP_HOST>` on the PCs, if they use the corporate web proxy.
+
+Then on the server:
+
+```bash
+cp http.keytab secrets/http.keytab
+sudo chown 10001 secrets/http.keytab && chmod 400 secrets/http.keytab   # the containers run as uid 10001
+# .env: KERBEROS_KEYTAB=/secrets/http.keytab   (KERBEROS_REALM only if it isn't LDAP_DOMAIN in capitals)
+docker compose up -d
+```
+
+Test from a domain PC: open `https://<APP_HOST>/`. It should go straight to search; if it shows the
+sign-in form, see the troubleshooting table. SSO users' groups are read with the `LDAP_BIND_DN`
+account, which must be able to read `tokenGroups` (members of *Windows Authorization Access Group* can).
 
 ### Running without the proxy (testing)
 
@@ -95,9 +129,12 @@ move forward, so roll back code across a migration only after checking it's comp
 ## Logs and status
 
 ```bash
-docker compose logs -f worker   # scans, LDAP lookups, dedupe
-docker compose logs -f api
+docker compose logs -f worker   # scans, LDAP lookups, indexing, dedupe
+docker compose logs -f api      # sign-ins, SSO and permission-check failures
 ```
+
+Who searched, viewed or downloaded what is in **Admin → Audit log** (CSV export), kept for
+`AUDIT_RETENTION_DAYS`.
 
 Scan errors (unreadable folders, permission problems) are also listed per run in **Scan activity**.
 A run with some errors is marked `partial`: folders that couldn't be read keep their previous data.
@@ -125,7 +162,11 @@ docker compose start api worker
 
 | Symptom | Likely cause |
 | --- | --- |
-| api keeps restarting, log says `SECRET_KEY is unset or still a placeholder` | Set a real `SECRET_KEY` (64 hex characters) in `.env` |
+| api keeps restarting, log says `DEV_MODE must not be enabled…` or `DEV_MODE only works with a local database` | `DEV_MODE=true` in the server's `.env`: set it to `false` |
+| Domain PCs get the sign-in form instead of SSO | Site not in the Local Intranet zone / allowlist, SPN missing or duplicated (`setspn -Q HTTP/<APP_HOST>`), hostname is a CNAME, or `KERBEROS_KEYTAB` unset. The api log says why a ticket was rejected |
+| SSO or sign-in says "Active Directory can't be reached" | The `LDAP_BIND_DN` account can't log in or can't read `tokenGroups`, or the DCs are unreachable |
+| Downloads fail with "can't be reached to check your access" | The api container can't reach the file server over SMB (opening a file re-checks its permissions live) |
+| Scanned PDFs are found by name only | `OCR_ENABLED=false`, or they were indexed before OCR was available: **Scan activity → Index now (retry failed)** |
 | Every LDAP sign-in fails; log mentions certificate / `invalid CA public key file` | `certs/internal-ca.pem` missing, or `LDAP_SERVER` isn't the name on the DC's certificate (use the FQDN, not an IP) |
 | Scan fails immediately with a logon error | `SMB_USERNAME`/`SMB_PASSWORD` wrong, or account locked/expired |
 | Folders show "ACL unreadable" | The scanner account lacks *Read permissions* on that folder |

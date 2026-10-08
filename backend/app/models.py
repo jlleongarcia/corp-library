@@ -5,6 +5,7 @@ from sqlalchemy import (
     JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -162,7 +163,7 @@ class Job(Base):
     __table_args__ = (Index("ix_jobs_status_priority", "status", "priority", "id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    kind: Mapped[str] = mapped_column(String(50))  # scan | resolve_principals | dedupe
+    kind: Mapped[str] = mapped_column(String(50))  # scan | resolve_principals | dedupe | index
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(20), default="queued")  # queued|running|done|failed
     priority: Mapped[int] = mapped_column(Integer, default=100)  # lower runs first
@@ -171,3 +172,73 @@ class Job(Base):
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     error: Mapped[Optional[str]] = mapped_column(Text)
+
+
+# ── Phase 1: sign-in, search, audit ──────────────────────────────────────────
+
+class AuthSession(Base):
+    """
+    A signed-in browser. The cookie holds a random token; only its SHA-256 is
+    stored, so a database dump can't be used to impersonate anyone.
+    """
+
+    __tablename__ = "sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    method: Mapped[str] = mapped_column(String(10))  # sso | ldap | dev
+    # The user's SID plus every group SID from AD (tokenGroups): what Windows
+    # would put in their access token. Permission checks use exactly this.
+    token_sids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    groups_resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    client_ip: Mapped[Optional[str]] = mapped_column(String(64))
+    user_agent: Mapped[Optional[str]] = mapped_column(String(300))
+
+    user: Mapped[User] = relationship()
+
+
+# PostgreSQL full-text vector; plain text on SQLite, which only the tests use.
+SearchVector = TSVECTOR().with_variant(Text(), "sqlite")
+
+
+class Document(Base):
+    """
+    What search looks at for one file: its name and path, plus its text when it
+    could be extracted. Created for every file by the `index` job.
+    """
+
+    __tablename__ = "documents"
+    __table_args__ = (Index("ix_documents_search_vector", "search_vector", postgresql_using="gin"),)
+
+    file_id: Mapped[int] = mapped_column(ForeignKey("files.id", ondelete="CASCADE"), primary_key=True)
+    # pending | text | ocr | empty | metadata | too_large | ocr_unavailable | error
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    content: Mapped[Optional[str]] = mapped_column(Text)
+    error: Mapped[Optional[str]] = mapped_column(String(500))
+    extracted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    search_vector: Mapped[Optional[str]] = mapped_column(SearchVector)
+
+    file: Mapped[File] = relationship()
+
+
+class AuditEvent(Base):
+    """
+    Who searched, viewed or downloaded what. Kept for AUDIT_RETENTION_DAYS. No
+    foreign key to files: the record must survive the file being deleted.
+    """
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    username: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    # sign_in | sign_in_failed | sign_out | search | view | preview | download | denied
+    action: Mapped[str] = mapped_column(String(20), index=True)
+    file_id: Mapped[Optional[int]] = mapped_column(Integer)
+    path: Mapped[Optional[str]] = mapped_column(Text)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    client_ip: Mapped[Optional[str]] = mapped_column(String(64))

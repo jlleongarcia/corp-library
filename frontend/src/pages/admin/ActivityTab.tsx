@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { RefreshCw, Users, Copy } from 'lucide-react'
+import { RefreshCw, Users, Copy, FileSearch } from 'lucide-react'
 import api from '../../lib/api'
-import type { Job, ScanRun, Share } from '../../types'
+import type { IndexStatusReport, Job, ScanRun, Share } from '../../types'
 import { Badge, Button } from '../../components/ui'
 import { Card, ErrorNote, Loading, Table } from './common'
 
@@ -29,7 +29,55 @@ function duration(a: string | null, b: string | null) {
 }
 
 const JOB_LABEL: Record<Job['kind'], string> = {
-  scan: 'Scan', resolve_principals: 'Resolve users & groups', dedupe: 'Find duplicates',
+  scan: 'Scan', resolve_principals: 'Resolve users & groups', dedupe: 'Find duplicates', index: 'Index content',
+}
+
+const INDEX_LABELS: [keyof IndexStatusReport['counts'], string, string][] = [
+  ['text', 'Text indexed', 'Content searchable'],
+  ['ocr', 'Read by OCR', 'Scanned documents'],
+  ['pending', 'Waiting', 'Content not read yet'],
+  ['not_indexed', 'New', 'Not processed yet'],
+  ['metadata', 'Name only', 'Types without text (images, CAD, …)'],
+  ['too_large', 'Too large', 'Above EXTRACT_MAX_SIZE'],
+  ['empty', 'No text', 'Nothing to extract'],
+  ['ocr_unavailable', 'Needs OCR', 'Scans; Tesseract missing'],
+  ['error', 'Unreadable', 'Protected or damaged'],
+]
+
+function IndexCard({ onReindex }: { onReindex: () => void }) {
+  const status = useQuery<IndexStatusReport>({
+    queryKey: ['index-status'],
+    queryFn: () => api.get('/admin/index-status').then((r) => r.data),
+    refetchInterval: 15000,
+  })
+  return (
+    <Card
+      title="Search index"
+      actions={
+        <Button variant="secondary" size="sm" onClick={onReindex}
+                title="Index new files and retry the ones that failed or needed OCR">
+          <FileSearch className="w-4 h-4" /> Index now (retry failed)
+        </Button>
+      }
+    >
+      {status.isLoading ? <Loading /> : status.error ? <ErrorNote error={status.error} /> : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {INDEX_LABELS.filter(([k]) => status.data!.counts[k]).map(([k, label, hint]) => (
+              <div key={k} className="rounded-lg border border-gray-200 px-3 py-2">
+                <p className="text-xs text-gray-500">{label}</p>
+                <p className="text-lg font-bold tabular-nums">{status.data!.counts[k]!.toLocaleString('en-GB')}</p>
+                <p className="text-[11px] text-gray-400">{hint}</p>
+              </div>
+            ))}
+          </div>
+          {!status.data!.ocr_available && (
+            <p className="text-xs text-amber-700">OCR is unavailable on this server: scanned PDFs are searchable by name only.</p>
+          )}
+        </div>
+      )}
+    </Card>
+  )
 }
 
 export default function ActivityTab() {
@@ -46,7 +94,7 @@ export default function ActivityTab() {
     refetchInterval: 10000,
   })
   const startJob = useMutation({
-    mutationFn: (kind: string) => api.post(`/admin/jobs/${kind}`),
+    mutationFn: (kind: string) => api.post(`/admin/jobs/${kind}`, null, { params: kind === 'index' ? { retry: true } : {} }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['jobs'] }),
   })
 
@@ -55,6 +103,7 @@ export default function ActivityTab() {
 
   return (
     <div className="space-y-6">
+      <IndexCard onReindex={() => startJob.mutate('index')} />
       <Card
         title="Jobs"
         actions={<>

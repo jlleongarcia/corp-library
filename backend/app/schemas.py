@@ -7,8 +7,8 @@ from pydantic import BaseModel, Field
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(default="", max_length=512)  # ignored in DEV_MODE
 
 
 class UserPublic(BaseModel):
@@ -18,10 +18,10 @@ class UserPublic(BaseModel):
     is_admin: bool = False
 
 
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    user: UserPublic
+class AuthConfig(BaseModel):
+    app_name: str
+    sso_enabled: bool  # try Kerberos before showing the form
+    dev_mode: bool  # the form needs no password
 
 
 # ── Shares ────────────────────────────────────────────────────────────────────
@@ -82,5 +82,118 @@ class ScanRunPublic(BaseModel):
     files_removed: int
     error_count: int
     error_sample: Optional[str]
+
+    model_config = {"from_attributes": True}
+
+
+# ── Search, browse, documents ─────────────────────────────────────────────────
+
+class SnippetSegment(BaseModel):
+    text: str
+    hit: bool
+
+
+class SearchResult(BaseModel):
+    file_id: int
+    name: str
+    extension: str
+    size: int
+    mtime: Optional[datetime]
+    share_id: int
+    share: str
+    folder_id: int
+    folder_path: str
+    path: str  # \\server\share\folder\file, for "copy network path"
+    snippet: list[SnippetSegment]
+
+
+class SearchResponse(BaseModel):
+    total: int
+    results: list[SearchResult]
+
+
+class Option(BaseModel):
+    key: str
+    label: str
+
+
+class SearchFilters(BaseModel):
+    shares: list[Option]
+    types: list[Option]
+
+
+class BrowseShare(BaseModel):
+    id: int
+    name: str
+    path: str
+    root_folder_id: int
+
+
+class Breadcrumb(BaseModel):
+    folder_id: Optional[int]  # None: the user can't list that ancestor
+    name: str
+
+
+class BrowseFolderRef(BaseModel):
+    id: int
+    name: str
+    mtime: Optional[datetime]
+
+
+class BrowseFile(BaseModel):
+    file_id: int
+    name: str
+    extension: str
+    size: int
+    mtime: Optional[datetime]
+
+
+class BrowseFolderInfo(BaseModel):
+    id: int
+    name: str
+    share_id: int
+    share: str
+    path: str
+
+
+class BrowseResponse(BaseModel):
+    folder: BrowseFolderInfo
+    breadcrumbs: list[Breadcrumb]
+    folders: list[BrowseFolderRef]
+    files: list[BrowseFile]
+    files_hidden: bool
+    files_truncated: bool
+
+
+class DocumentDetail(BaseModel):
+    file_id: int
+    name: str
+    extension: str
+    size: int
+    mtime: Optional[datetime]
+    ctime: Optional[datetime]
+    share_id: int
+    share: str
+    folder_id: int
+    folder_path: str
+    path: str
+    # pending | text | ocr | empty | metadata | too_large | ocr_unavailable | error | null (not indexed yet)
+    index_status: Optional[str]
+    preview: Optional[str]  # pdf | image: can be shown inline
+    text_excerpt: Optional[str]
+    text_truncated: bool
+
+
+# ── Audit ─────────────────────────────────────────────────────────────────────
+
+class AuditEventPublic(BaseModel):
+    id: int
+    at: datetime
+    username: Optional[str]
+    action: str
+    file_id: Optional[int]
+    path: Optional[str]
+    detail: dict[str, Any]
+    client_ip: Optional[str]
 
     model_config = {"from_attributes": True}

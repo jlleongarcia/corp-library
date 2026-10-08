@@ -1,22 +1,20 @@
 import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import AppLayout from './components/layout/AppLayout'
 import LoginPage from './pages/LoginPage'
-import WelcomePage from './pages/WelcomePage'
+import SearchPage from './pages/SearchPage'
+import BrowsePage from './pages/BrowsePage'
+import DocumentPage from './pages/DocumentPage'
 import AdminPage from './pages/admin/AdminPage'
-import { useAuth } from './hooks/useAuth'
-
-function Home() {
-  const { user } = useAuth()
-  // Phase 0 has no end-user features yet: admins land on the console.
-  return user?.is_admin ? <Navigate to="/admin" replace /> : <WelcomePage />
-}
 
 const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
   {
     element: <AppLayout />,
     children: [
-      { index: true, element: <Home /> },
+      { index: true, element: <SearchPage /> },
+      { path: 'browse', element: <BrowsePage /> },
+      { path: 'browse/:folderId', element: <BrowsePage /> },
+      { path: 'documents/:fileId', element: <DocumentPage /> },
       { path: 'admin', element: <AdminPage /> },
       { path: 'admin/:tab', element: <AdminPage /> },
     ],

@@ -1,6 +1,6 @@
 # Corp Library — Roadmap
 
-_Last updated: 2026-10-06 (phase 0 implemented)_
+_Last updated: 2026-10-07 (phase 1 implemented; waiting on IT for SSO and real-user verification)_
 
 Corp Library is an internal web app that helps our department (~15 people) find documents on the
 department shares and decide where new documents belong. It indexes the 5 top-level shares on the
@@ -64,7 +64,7 @@ flowchart LR
 | `web` | nginx: serves the built React app, proxies `/api` to FastAPI. Reached only through the shared Traefik proxy, which terminates TLS |
 | `api` | FastAPI: auth, search, document streaming, assistant chat, admin |
 | `worker` | Same codebase, different entrypoint: scans, text extraction, embeddings, reports. Job queue in Postgres (no broker) |
-| `db` | PostgreSQL 16+ with `pgvector`; full-text search via `tsvector` (English + Spanish, `unaccent`) |
+| `db` | PostgreSQL 16+ with `pgvector`; full-text search via `tsvector` (English + Spanish; accents folded by the app) |
 | `ollama` | Local LLM and embedding model; optional GPU passthrough |
 
 ### How permissions work
@@ -128,21 +128,47 @@ Notes from implementation:
 
 _Goal: everyone uses it daily to find documents._
 
-- [ ] Kerberos SSO + LDAP fallback + HttpOnly session cookies (replace JWT in `localStorage`)
-- [ ] Group resolution via `tokenGroups`; SID-based permission filter on every query
-- [ ] Text extraction for Office/PDF/text (Docling or Tika); OCR for scanned PDFs (Tesseract, `spa+eng`).
+- [x] Kerberos SSO + LDAP fallback + HttpOnly session cookies (replace JWT in `localStorage`)
+- [x] Group resolution via `tokenGroups`; SID-based permission filter on every query
+- [x] Text extraction for Office/PDF/text; OCR for scanned PDFs (Tesseract, `spa+eng`).
       Other types (images, video, CAD, archives) are indexed by name, path and metadata only
-- [ ] Postgres full-text search: title, path, content; filters by share, type, date; highlighted snippets
-- [ ] Browse the share tree (permission-filtered)
-- [ ] Document page: metadata, preview where possible, download (re-checked), **"copy network path"**
+- [x] Postgres full-text search: title, path, content; filters by share, type, date; highlighted snippets
+- [x] Browse the share tree (permission-filtered)
+- [x] Document page: metadata, preview where possible, download (re-checked), **"copy network path"**
       button (browsers block `file://` links from HTTPS pages)
-- [ ] Audit log of searches, opens and downloads
+- [x] Audit log of searches, opens and downloads
 - [x] Shared Traefik proxy (`traefik-proxy` project) routing `APP_HOST` to the app
 - [ ] Internal CA certificate installed in traefik-proxy
+- [ ] SSO tested on a domain PC; permission results checked against Explorer with 3 real users
 
 **Exit:** all 15 users signed in by SSO; search results match what each person can open in Explorer
 (verified with at least 3 users with different access).
-**Blocked by IT:** SPN + keytab, DNS A record, intranet-zone GPO, proxy bypass, certificate.
+**Blocked by IT:** SPN + keytab, DNS A record, intranet-zone GPO, proxy bypass, certificate,
+`tokenGroups` read access for the LDAP service account.
+
+Notes from implementation:
+- **Sessions** are server-side rows with a random token in an HttpOnly, Secure, SameSite=Lax cookie
+  (only its hash is stored), so sign-out and account removal end them immediately. `SECRET_KEY` is gone:
+  nothing is signed. CSRF: state-changing requests must carry `X-Requested-With`.
+- **Groups** come from `tokenGroups` at sign-in (nested and domain-local groups included) and are
+  re-read every `GROUPS_REFRESH_HOURS`. If AD is unreachable, cached groups are trusted for 3× that,
+  then the user must sign in again. A disabled or deleted account loses its sessions at the next refresh.
+- **Permission filter:** files are visible when their folder's *inheritable* ACEs let the user read
+  (`can_read_files`, BUG-007). Browsing behaves like access-based enumeration (only listable folders).
+  Admins get no extra visibility. Open/download/preview re-read the **file's own live ACL** over SMB,
+  which covers files stricter than their folder and changes since the last scan. Share-level
+  permissions are still not read (BUG-006).
+- **Extraction** uses pdfium (PDF) and plain zip/XML parsing (Word, Excel, PowerPoint, OpenDocument),
+  in the worker. No Tika/Docling container, and everything is testable on Windows. Pages without a text
+  layer are OCR'd page by page. Legacy `.doc/.xls/.ppt`, `.msg` and `.rtf` are name-only for now; add
+  them if the file-type question below says they matter.
+- **Accents** are folded in Python before indexing and searching (the dev PostgreSQL has no `unaccent`),
+  so behaviour is identical everywhere. Names and paths are split into words (`INF-2023_x.pdf` →
+  `inf 2023 x pdf`) and stemmed in Spanish and English like the content.
+- **Indexing** is the `index` job after each scan batch: a fast name/path pass, then content in
+  20-minute rounds that requeue themselves, so the first 2 TB pass never blocks a nightly scan.
+- **DEV_MODE** (BUG-017): password-less dev users with fake groups, refused unless LDAP is off and the
+  database is local. `.corplib-acl.json` files fake folder permissions on local test shares.
 
 ### Phase 2 — Folder plan in the app
 
@@ -231,4 +257,5 @@ cites a document the asking user can't open.
 - [ ] Final hostname for the app.
 - [ ] Do PCs route intranet traffic through the corporate web proxy?
 - [ ] GPU: ask now or after phase 1?
-- [ ] Which file types matter most for content extraction (Office, PDF, scanned PDFs, others)?
+- [ ] Which file types matter most for content extraction? Phase 1 reads Office 2007+, PDF (with OCR),
+      OpenDocument and text; legacy `.doc/.xls/.ppt`, `.msg` and `.rtf` are name-only until asked for.

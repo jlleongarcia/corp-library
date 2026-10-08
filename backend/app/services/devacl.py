@@ -1,0 +1,82 @@
+"""
+Fake Windows permissions for local test shares (DEV_MODE only).
+
+Local folders have no Windows ACLs the app can use, so without this nothing
+would be searchable on a developer PC (no ACL = nobody sees it). By default
+everyone can read everything. To test permissions, put a `.corplib-acl.json`
+in a folder; it replaces the inherited permissions for that folder and below,
+as "disable inheritance" does in Explorer:
+
+    {"read": ["hr", "alice"], "deny": ["bob"], "list": ["everyone"]}
+
+- read: open files and list folders, inherited by everything below
+- deny: denied read, inherited by everything below
+- list: list this folder only (its files stay closed: BUG-007)
+
+Names are usernames or the groups in DEV_GROUPS; "everyone" is everyone.
+"""
+
+import json
+import logging
+import os
+import posixpath
+from typing import Optional
+
+from ..acl.descriptor import (
+    CONTAINER_INHERIT_ACE, FILE_GENERIC_READ, INHERITED_ACE, OBJECT_INHERIT_ACE, Ace,
+    build_security_descriptor,
+)
+from ..auth.dev import dev_sid
+
+logger = logging.getLogger(__name__)
+
+ACL_FILE = ".corplib-acl.json"
+INHERIT = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+DEFAULT_RULES = {"read": ["everyone"]}
+
+
+def _folder_aces(rules: dict) -> list[Ace]:
+    """The ACEs set on the folder holding the rules. Deny first, as Windows orders them."""
+    aces = [Ace(dev_sid(n), "deny", FILE_GENERIC_READ, INHERIT) for n in rules.get("deny", [])]
+    aces += [Ace(dev_sid(n), "allow", FILE_GENERIC_READ, INHERIT) for n in rules.get("read", [])]
+    aces += [Ace(dev_sid(n), "allow", FILE_GENERIC_READ, 0) for n in rules.get("list", [])]
+    return aces
+
+
+def _inherited(aces: list[Ace], flag: int) -> list[Ace]:
+    """What a child inherits: the ACEs with `flag` (OI for files, CI for folders)."""
+    return [Ace(a.sid, a.ace_type, a.mask, a.flags | INHERITED_ACE) for a in aces if a.flags & flag]
+
+
+def _nearest_rules(root: str, folder: str) -> tuple[str, dict]:
+    """The closest folder at or above `folder` with an ACL file, and its rules."""
+    current = folder
+    while True:
+        path = os.path.join(root, *current.split("/"), ACL_FILE) if current else os.path.join(root, ACL_FILE)
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    return current, json.load(f)
+            except (OSError, ValueError) as exc:
+                logger.warning("Ignoring unreadable %s: %s", path, exc)
+                return current, {}  # broken file: nobody (fail closed)
+        if not current:
+            return "", DEFAULT_RULES
+        current = posixpath.dirname(current)
+
+
+def dev_security_descriptor(root: str, relpath: str) -> Optional[bytes]:
+    abs_path = os.path.join(root, *relpath.split("/")) if relpath else root
+    is_dir = os.path.isdir(abs_path)
+    folder = relpath if is_dir else posixpath.dirname(relpath)
+    owner_folder, rules = _nearest_rules(root, folder)
+    aces = _folder_aces(rules)
+    if not is_dir:
+        return build_security_descriptor(_inherited(aces, OBJECT_INHERIT_ACE))
+    if owner_folder != folder:
+        return build_security_descriptor(_inherited(aces, CONTAINER_INHERIT_ACE))
+    return build_security_descriptor(aces, protected=True)
+
+
+def provider_for(root: str):
+    return lambda relpath: dev_security_descriptor(os.path.abspath(root), relpath)

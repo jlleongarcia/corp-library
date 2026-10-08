@@ -1,29 +1,40 @@
 import axios from 'axios'
 
+// The session lives in an HttpOnly cookie the browser sends by itself; this code
+// never sees it. Every request carries X-Requested-With, which the API requires
+// on changes as CSRF protection (other sites can't add that header).
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? '/api',
   timeout: 30_000,
+  headers: { 'X-Requested-With': 'XMLHttpRequest' },
 })
 
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token')
-  if (token) config.headers.Authorization = `Bearer ${token}`
-  return config
-})
+/** Called when a request finds the session gone (expired, signed out elsewhere, removed from AD). */
+let onSessionLost: () => void = () => {}
+export function setSessionLostHandler(handler: () => void) {
+  onSessionLost = handler
+}
 
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    // A 401 from the login form itself means wrong credentials: let the form show
-    // its message instead of reloading the page (which would erase it).
-    const isLogin = err.config?.url === '/auth/login'
-    if (err.response?.status === 401 && !isLogin) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      window.location.href = '/login'
-    }
+    // 401s from /auth/* are answers about signing in (wrong password, SSO not
+    // possible): the sign-in page handles them.
+    const isAuthCall = String(err.config?.url ?? '').startsWith('/auth/')
+    if (err.response?.status === 401 && !isAuthCall) onSessionLost()
     return Promise.reject(err)
   },
 )
+
+/** The message the API put in `detail`, or a fallback. */
+export function errorMessage(err: unknown, fallback = 'Something went wrong'): string {
+  const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+  return typeof detail === 'string' ? detail : (err as Error)?.message ?? fallback
+}
+
+/** Where the browser downloads a file from: a plain link works, the cookie goes with it. */
+export function apiUrl(path: string): string {
+  return `${api.defaults.baseURL}${path}`
+}
 
 export default api

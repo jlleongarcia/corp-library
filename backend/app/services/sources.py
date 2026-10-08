@@ -4,7 +4,8 @@ File sources: where the scanner reads folders, files and permissions from.
 - SmbSource reads a Windows share over SMB with the read-only service account.
 - LocalSource reads a local directory; used in development and tests. It has no
   Windows ACLs, so unless an `sd_provider` is supplied every folder ends up with
-  no ACL, which the app treats as "nobody but admins" (fail closed).
+  no ACL, which the app treats as "nobody" (fail closed). In DEV_MODE the
+  provider is services/devacl.py: everyone reads, unless .corplib-acl.json says otherwise.
 """
 
 import os
@@ -16,6 +17,7 @@ from typing import BinaryIO, Iterator, Optional, Protocol
 
 FILE_ATTRIBUTE_DIRECTORY = 0x10
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+DEV_ACL_FILE = ".corplib-acl.json"  # same name as devacl.ACL_FILE (imported lazily there)
 
 
 @dataclass(frozen=True)
@@ -31,7 +33,7 @@ class DirEntry:
 class FileSource(Protocol):
     def list_dir(self, relpath: str) -> list[DirEntry]: ...
 
-    def get_security_descriptor(self, relpath: str) -> Optional[bytes]: ...
+    def get_security_descriptor(self, relpath: str, is_dir: bool = True) -> Optional[bytes]: ...
 
     def open_read(self, relpath: str) -> "contextmanager[BinaryIO]": ...
 
@@ -43,7 +45,15 @@ def is_unc(path: str) -> bool:
 
 
 def source_for(path: str) -> FileSource:
-    return SmbSource(path) if is_unc(path) else LocalSource(path)
+    if is_unc(path):
+        return SmbSource(path)
+    from ..config import settings
+
+    if settings.dev_mode:
+        from .devacl import provider_for
+
+        return LocalSource(path, provider_for(path))
+    return LocalSource(path)
 
 
 # ── Local ─────────────────────────────────────────────────────────────────────
@@ -60,6 +70,8 @@ class LocalSource:
         out = []
         with os.scandir(self._abs(relpath)) as it:
             for e in it:
+                if e.name == DEV_ACL_FILE:
+                    continue  # fake permissions for DEV_MODE, not a document
                 st = e.stat(follow_symlinks=False)
                 is_link = e.is_symlink() or e.is_junction()
                 # A link to a directory must still count as a directory, so the
@@ -77,7 +89,7 @@ class LocalSource:
                 )
         return out
 
-    def get_security_descriptor(self, relpath: str) -> Optional[bytes]:
+    def get_security_descriptor(self, relpath: str, is_dir: bool = True) -> Optional[bytes]:
         return self.sd_provider(relpath) if self.sd_provider else None
 
     @contextmanager
@@ -144,16 +156,17 @@ class SmbSource:
             )
         return out
 
-    def get_security_descriptor(self, relpath: str) -> Optional[bytes]:
-        """Fetch owner + DACL with an SMB2 QUERY_INFO (InfoType SECURITY)."""
-        from smbclient._io import SMBDirectoryIO, SMBFileTransaction
+    def get_security_descriptor(self, relpath: str, is_dir: bool = True) -> Optional[bytes]:
+        """Fetch owner + DACL of a folder (or file) with an SMB2 QUERY_INFO (InfoType SECURITY)."""
+        from smbclient._io import SMBDirectoryIO, SMBFileIO, SMBFileTransaction
         from smbprotocol.file_info import InfoType
         from smbprotocol.open import (
             DirectoryAccessMask, SMB2QueryInfoRequest, SMB2QueryInfoResponse,
         )
 
         self._ensure_session()
-        raw = SMBDirectoryIO(
+        # READ_CONTROL | FILE_READ_ATTRIBUTES, which have the same values for files.
+        raw = (SMBDirectoryIO if is_dir else SMBFileIO)(
             self._abs(relpath),
             mode="r",
             share_access="rwd",

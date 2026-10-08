@@ -4,7 +4,8 @@ Share scanner.
 Walks a share folder by folder. For each folder it reads the security descriptor
 (stored as a deduplicated ACL) and lists its entries, then reconciles them with
 the database: new rows are inserted, changed files updated (and their hashes
-cleared), and entries that disappeared are deleted.
+cleared, their text queued for re-extraction), and entries that disappeared are
+deleted.
 
 Reconciliation happens per folder, so a folder that can't be listed (permission
 error, network hiccup) keeps its previous contents instead of being wiped.
@@ -15,12 +16,12 @@ import posixpath
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from ..acl.descriptor import parse_security_descriptor
 from ..config import settings
-from ..models import Acl, AclEntry, File, Folder, ScanRun, Share
+from ..models import Acl, AclEntry, Document, File, Folder, ScanRun, Share
 from .sources import DirEntry, FileSource, source_for
 
 logger = logging.getLogger(__name__)
@@ -64,9 +65,11 @@ def _extension(name: str) -> str:
 
 
 def _ignored(name: str) -> bool:
-    if name in settings.scan_ignore_names:
+    # Windows names are case-insensitive: THUMBS.DB is Thumbs.db.
+    folded = name.casefold()
+    if folded in {n.casefold() for n in settings.scan_ignore_names}:
         return True
-    return any(name.startswith(p) for p in settings.scan_ignore_prefixes)
+    return any(folded.startswith(p.casefold()) for p in settings.scan_ignore_prefixes)
 
 
 def _same_time(a: Optional[datetime], b: Optional[datetime]) -> bool:
@@ -215,6 +218,8 @@ class ShareScanner:
                 row.size, row.mtime, row.ctime = e.size, e.mtime, e.ctime
                 row.quick_hash = row.content_hash = None
                 row.indexed_at = datetime.now(timezone.utc)
+                # Search keeps the old text until the index job has read the new one.
+                self.db.execute(update(Document).where(Document.file_id == row.id).values(status="pending"))
                 self.run.files_updated += 1
         if existing:
             self.db.execute(delete(File).where(File.id.in_([f.id for f in existing.values()])))

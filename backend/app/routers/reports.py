@@ -1,21 +1,35 @@
-"""Discovery reports (admin only). Every list report also exports as CSV with ?format=csv."""
+"""Discovery reports and the audit log (admin only). Every list also exports as CSV with ?format=csv."""
 
 import csv
 import io
-from datetime import datetime
+import json
+from datetime import date, datetime
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from ..auth.jwt import require_admin
+from ..auth.sessions import require_admin
 from ..database import get_db
-from ..services import reports
+from ..schemas import AuditEventPublic
+from ..services import audit, reports
 
 router = APIRouter(prefix="/admin/reports", tags=["reports"], dependencies=[Depends(require_admin)])
 
 Format = Literal["json", "csv"]
+
+# Excel runs a cell starting with these as a formula: a file named
+# "=HYPERLINK(...).docx", or a search typed by a user, must stay text (BUG-012).
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _cell(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
 
 
 def _csv(rows: list[dict], filename: str) -> StreamingResponse:
@@ -25,7 +39,7 @@ def _csv(rows: list[dict], filename: str) -> StreamingResponse:
         writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()), delimiter=";")
         writer.writeheader()
         for r in rows:
-            writer.writerow({k: v.isoformat() if isinstance(v, datetime) else v for k, v in r.items()})
+            writer.writerow({k: _cell(v) for k, v in r.items()})
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]),
@@ -45,7 +59,7 @@ def summary(db: Session = Depends(get_db)):
 
 @router.get("/extensions")
 def extensions(
-    share_id: Optional[int] = None, limit: int = Query(100, le=1000),
+    share_id: Optional[int] = None, limit: int = Query(100, ge=1, le=1000),
     format: Format = "json", db: Session = Depends(get_db),
 ):
     rows = reports.by_extension(db, share_id, limit)
@@ -54,7 +68,7 @@ def extensions(
 
 @router.get("/duplicates")
 def duplicates(
-    limit: int = Query(50, le=500), offset: int = 0, format: Format = "json", db: Session = Depends(get_db)
+    limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0), format: Format = "json", db: Session = Depends(get_db)
 ):
     data = reports.duplicates(db, limit, offset)
     if format == "csv":
@@ -69,7 +83,7 @@ def duplicates(
 
 @router.get("/stale")
 def stale(
-    years: int = Query(5, ge=1, le=50), share_id: Optional[int] = None, limit: int = Query(100, le=1000),
+    years: int = Query(5, ge=1, le=50), share_id: Optional[int] = None, limit: int = Query(100, ge=1, le=1000),
     format: Format = "json", db: Session = Depends(get_db),
 ):
     rows = reports.stale_folders(db, years, share_id, limit)
@@ -78,7 +92,7 @@ def stale(
 
 @router.get("/hygiene")
 def hygiene(
-    share_id: Optional[int] = None, limit: int = Query(200, le=2000),
+    share_id: Optional[int] = None, limit: int = Query(200, ge=1, le=2000),
     format: Format = "json", db: Session = Depends(get_db),
 ):
     data = reports.hygiene(db, share_id, limit)
@@ -120,3 +134,22 @@ def permissions(max_depth: int = Query(2, ge=0, le=10), format: Format = "json",
         ]
         return _csv(rows, "permissions")
     return data
+
+
+@router.get("/audit")
+def audit_log(
+    username: Optional[str] = Query(None, max_length=100), action: Optional[str] = None,
+    since: Optional[date] = None, until: Optional[date] = None,
+    limit: int = Query(200, ge=1, le=10_000), offset: int = Query(0, ge=0),
+    format: Format = "json", db: Session = Depends(get_db),
+):
+    data = audit.query(db, username, action, since, until, limit, offset)
+    if format == "csv":
+        rows = [
+            {"at": e.at, "user": e.username or "", "action": e.action, "path": e.path or "",
+             "query": e.detail.get("q", ""), "results": e.detail.get("results", ""),
+             "ip": e.client_ip or "", "detail": json.dumps(e.detail, ensure_ascii=False)}
+            for e in data["events"]
+        ]
+        return _csv(rows, "audit")
+    return {"total": data["total"], "events": [AuditEventPublic.model_validate(e) for e in data["events"]]}

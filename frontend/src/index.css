@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Highlight snippets returned by the FTS5 `snippet()` function */
+/* Search snippet highlights (segments from the API, see components/library.tsx) */
 mark {
   @apply bg-yellow-100 text-yellow-900 rounded px-0.5 not-italic font-medium;
 }

@@ -8,6 +8,7 @@ import DuplicatesTab from './DuplicatesTab'
 import StaleTab from './StaleTab'
 import HygieneTab from './HygieneTab'
 import PermissionsTab from './PermissionsTab'
+import AuditTab from './AuditTab'
 
 const TABS = [
   { id: 'overview', label: 'Overview', element: <OverviewTab /> },
@@ -17,6 +18,7 @@ const TABS = [
   { id: 'duplicates', label: 'Duplicates', element: <DuplicatesTab /> },
   { id: 'stale', label: 'Stale files', element: <StaleTab /> },
   { id: 'hygiene', label: 'Hygiene', element: <HygieneTab /> },
+  { id: 'audit', label: 'Audit log', element: <AuditTab /> },
 ]
 
 export default function AdminPage() {
@@ -30,7 +32,7 @@ export default function AdminPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Admin console</h1>
-        <p className="text-sm text-gray-500">Inventory and permission reports for the department shares.</p>
+        <p className="text-sm text-gray-500">Scans, search index, reports and the audit log.</p>
       </div>
       <nav className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-gray-200">
         {TABS.map((t) => (

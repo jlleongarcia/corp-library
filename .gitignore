@@ -55,3 +55,6 @@ backups/
 
 # ── Local development data (scripts/dev.py) ──────────────────────────────────
 backend/.devdata/
+
+# ── Secrets mounted into the containers (Kerberos keytab) ────────────────────
+secrets/
