@@ -25,7 +25,7 @@ Run every check with `cd backend && uv run pytest` (SQLite) and `uv run scripts/
 
 | ID | Severity | Bug | Due | Status | Check |
 | --- | --- | --- | --- | --- | --- |
-| [BUG-001](#bug-001) | Critical | `web` service runs the API image | Before production | 🟡 | First `docker compose up` on the server |
+| [BUG-001](#bug-001) | Critical | `web` service runs the API image | Before production | 🟡 | CI `.github/ci/smoke_test.sh` (✅ after its first green run) |
 | [BUG-002](#bug-002) | Critical | Default `SECRET_KEY` lets anyone mint admin tokens | Before first real scan | ✅ | `test_hardening.py::test_unknown_or_forged_session_cookie_is_rejected` and 3 more |
 | [BUG-003](#bug-003) | Critical | LDAPS doesn't validate the DC certificate | Before first real scan | 🟡 | `test_hardening.py::test_ldaps_always_validates_the_certificate` + first real sign-in |
 | [BUG-004](#bug-004) | High | SMB session never re-authenticates after a dropped connection | Before first real scan | 🟡 | `test_hardening.py::test_smb_credentials_become_the_client_default` + real scan |
@@ -35,7 +35,7 @@ Run every check with `cd backend && uv run pytest` (SQLite) and `uv run scripts/
 | [BUG-008](#bug-008) | High | Nightly scan skipped if the worker is busy at `SCAN_HOUR` | Before first real scan | ✅ | `test_hardening.py::test_nightly_scan_catches_up_after_a_long_job` |
 | [BUG-009](#bug-009) | High | Transient LDAP error marks known users/groups "unknown" | Before first real scan | ✅ | `test_api.py::test_ldap_outage_keeps_known_principals` and 2 more |
 | [BUG-010](#bug-010) | Medium | Login identity is the typed username; LDAP filter not escaped | Before first real scan | ✅ | `test_hardening.py::test_login_identity_is_the_account_ad_returns` and 2 more |
-| [BUG-011](#bug-011) | Medium | nginx drops security headers on `index.html` | Before production | 🟡 | `curl -I https://<APP_HOST>/` on the server |
+| [BUG-011](#bug-011) | Medium | nginx drops security headers on `index.html` | Before production | 🟡 | CI `.github/ci/smoke_test.sh` (✅ after its first green run) |
 | [BUG-012](#bug-012) | Medium | CSV exports open to formula injection in Excel | Before production | ✅ | `test_search.py::test_searches_views_and_downloads_are_audited` |
 | [BUG-013](#bug-013) | Medium | Unreachable share = "partial"; unlisted folders reported "empty" | Before first real scan | ✅ | `test_scanner.py::test_unreachable_share_fails_the_run`, `test_api.py::test_hygiene_reports_unlisted_folders_not_empty` |
 | [BUG-014](#bug-014) | Low | Scan ignore list is case-sensitive | Before production | ✅ | `test_hardening.py::test_scan_ignore_list_ignores_case` |
@@ -46,6 +46,7 @@ Run every check with `cd backend && uv run pytest` (SQLite) and `uv run scripts/
 | [BUG-019](#bug-019) | Low | Two workers would scan the same share concurrently | Before production | ⬜ | — |
 | [BUG-020](#bug-020) | Low | Compose header says `up -d --build` but nothing builds | Before production | ✅ | Comment only |
 | [BUG-021](#bug-021) | Medium | `-word` doesn't exclude other forms of the word | Before production | ✅ | `test_search.py::test_excluded_words_and_phrases` (PostgreSQL) |
+| [BUG-022](#bug-022) | Low | Mixed `/` and `\` in paths of local shares on Linux (CI red) | Now | ✅ | `test_api.py::test_display_paths_keep_the_share_separator` |
 
 ---
 
@@ -286,6 +287,17 @@ saying "informes" and let it through.
 - **Fix:** `parse_query` takes `-word` and `-"phrase"` out of the query; `search.py` rejects a document
   when any of the three forms of each exclusion matches. `-INF-2023` excludes the phrase "inf 2023".
 - **Files:** `backend/app/services/text.py`, `backend/app/services/search.py`
+- **Status:** ✅ Fixed.
+
+### BUG-022
+
+**CI red since phase 1: mixed separators in paths of local shares.** `display_path` always joined with
+`\`, right for production's UNC shares, but a local share on Linux showed as `/srv/share\Finance\a.docx`.
+`test_results_carry_snippet_and_network_path` failed on the Linux runner; Windows hid it.
+
+- **Fix:** `display_path` keeps `/` for POSIX share paths (`/...`, not `//server`); report tests
+  compare with `os.sep`.
+- **Files:** `backend/app/services/reports.py`, `backend/tests/test_api.py`, `backend/tests/test_search.py`
 - **Status:** ✅ Fixed.
 
 ---

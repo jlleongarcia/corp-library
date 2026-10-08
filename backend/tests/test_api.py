@@ -1,3 +1,5 @@
+import os
+
 from sqlalchemy.orm import sessionmaker
 
 from app.models import GroupMember, Principal, Share
@@ -107,7 +109,7 @@ def test_reports(client, admin, engine, tree):  # noqa: F811
 
     exc = client.get("/admin/reports/acl-exceptions").json()
     paths = {e["path"].replace(str(tree), "<root>") for e in exc}
-    assert paths == {"<root>", "<root>\\HR"}  # share root + the folder with its own permissions
+    assert paths == {"<root>", f"<root>{os.sep}HR"}  # share root + the folder with its own permissions
     hr = next(e for e in exc if e["path"].endswith("HR"))
     assert hr["inheritance_disabled"] and hr["entries"][0]["name"] == "DEPT-HR"
 
@@ -116,9 +118,10 @@ def test_permission_grid(client, admin, engine, tree):  # noqa: F811
     _scanned(engine, tree)
     grid = client.get("/admin/reports/permissions").json()
     cols = {c["path"].replace(str(tree), "<root>"): c["folder_id"] for c in grid["columns"]}
-    assert set(cols) == {"<root>", "<root>\\HR"}
+    hr_path = f"<root>{os.sep}HR"
+    assert set(cols) == {"<root>", hr_path}
     rows = {r["name"]: r["cells"] for r in grid["rows"]}
-    root, hr = str(cols["<root>"]), str(cols["<root>\\HR"])
+    root, hr = str(cols["<root>"]), str(cols[hr_path])
     assert rows["All domain users"] == {root: "none", hr: "none"}
     assert rows["alice"] == {root: "read", hr: "none"}  # Finance only
     assert rows["bob"] == {root: "read", hr: "read"}  # Finance + HR
@@ -192,3 +195,10 @@ def test_negative_limit_or_offset_is_a_422_not_a_500(client, admin):
     for url in ("/admin/jobs?limit=-1", "/admin/scan-runs?limit=0", "/admin/reports/duplicates?offset=-5",
                 "/admin/reports/stale?limit=-1", "/admin/reports/audit?offset=-1", "/search?limit=0"):
         assert client.get(url).status_code == 422, url
+
+
+def test_display_paths_keep_the_share_separator():
+    from app.services.reports import display_path
+    assert display_path(r"\fs01\Finance", "Budget/2025", "a.xlsx") == r"\fs01\Finance\Budget\2025\a.xlsx"
+    assert display_path("/srv/finance/", "Budget/2025", "a.xlsx") == "/srv/finance/Budget/2025/a.xlsx"
+    assert display_path(r"C:\Shares\Finance", "", "a.xlsx") == r"C:\Shares\Finance\a.xlsx"

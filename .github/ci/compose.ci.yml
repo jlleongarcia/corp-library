@@ -1,0 +1,5 @@
+# CI only (smoke_test.sh): publish nginx on the runner so the test can reach it.
+# In production Traefik reaches it over the `proxy` network instead.
+services:
+  web:
+    ports: ["127.0.0.1:8080:80"]

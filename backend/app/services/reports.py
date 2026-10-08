@@ -21,12 +21,15 @@ def _share_filter(stmt, column, share_id: Optional[int]):
 
 
 def display_path(share_path: str, folder_path: str, name: str = "") -> str:
+    # Shares are UNC paths in production; a local folder on a Linux dev box or CI
+    # runner (/home/...) keeps its own separator.
+    sep = "/" if share_path.startswith("/") and not share_path.startswith("//") else "\\"
     parts = [share_path.rstrip("\\/")]
     if folder_path:
-        parts.append(folder_path.replace("/", "\\"))
+        parts.append(folder_path.replace("/", sep))
     if name:
         parts.append(name)
-    return "\\".join(parts)
+    return sep.join(parts)
 
 
 # ── Inventory ─────────────────────────────────────────────────────────────────

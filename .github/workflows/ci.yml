@@ -1,6 +1,8 @@
-# Tests every push and pull request. When the repository variable PUBLISH_IMAGES
-# is "true" (not set yet: off until the app is ready), it also builds the Docker
-# images and, on main, pushes them to GitHub Container Registry (ghcr.io):
+# Tests every push and pull request, then builds the Docker images and smoke-tests
+# them: Kerberos and OCR inside the api image, and the production Compose stack
+# through nginx (.github/ci/). When the repository variable PUBLISH_IMAGES is
+# "true" (not set yet: off until the app is ready), pushes to main also publish
+# the images to GitHub Container Registry (ghcr.io):
 #
 #   ghcr.io/<owner>/corp-library-api:latest   (+ :sha-<commit>)   used by api and worker
 #   ghcr.io/<owner>/corp-library-web:latest   (+ :sha-<commit>)   used by web
@@ -81,30 +83,61 @@ jobs:
       - run: npm run build  # type-checks (tsc) and bundles
 
   images:
-    name: Image ${{ matrix.image }}
+    name: Images (build + smoke test)
     needs: [backend, frontend]
-    # Off until the app is ready to deploy. To enable: repo Settings → Secrets and
-    # variables → Actions → Variables → New repository variable PUBLISH_IMAGES = true.
-    if: vars.PUBLISH_IMAGES == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    strategy:
-      matrix:
-        include:
-          - image: api
-            context: backend
-          - image: web
-            context: frontend
     env:
-      # Pull requests only check that the images build; main also publishes them.
-      PUSH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      # The names docker-compose.yml runs; the smoke test starts that file as is.
+      API_IMAGE: ghcr.io/jlleongarcia/corp-library-api
+      WEB_IMAGE: ghcr.io/jlleongarcia/corp-library-web
+      # Only pushes to main publish, and only once PUBLISH_IMAGES is "true".
+      PUSH: ${{ vars.PUBLISH_IMAGES == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v5
 
       - uses: docker/setup-buildx-action@v3
 
+      # Build both images into the local Docker engine, tagged as Compose expects.
+      - name: Build api image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.API_IMAGE }}:latest
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.WEB_IMAGE }}:latest
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+
+      - name: Self-test api image (gssapi, Tesseract spa+eng, OCR of a scanned PDF)
+        run: >
+          docker run --rm -e OCR_ENABLED=true -e PYTHONPATH=/app
+          -v "$PWD/.github/ci:/ci:ro" "$API_IMAGE:latest" python /ci/image_selftest.py
+
+      - name: Smoke-test the Compose stack through nginx
+        run: bash .github/ci/smoke_test.sh
+
+      - name: Container logs
+        if: failure()
+        run: docker compose -f docker-compose.yml -f .github/ci/compose.ci.yml logs --no-color --tail 200
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose -f docker-compose.yml -f .github/ci/compose.ci.yml down -v || true
+
+      # ── Publish (tested images only; the cache makes these rebuilds instant) ──
       - uses: docker/login-action@v3
         if: env.PUSH == 'true'
         with:
@@ -112,20 +145,42 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: meta
+      - id: api-meta
+        if: env.PUSH == 'true'
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/corp-library-${{ matrix.image }}
+          images: ${{ env.API_IMAGE }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
             type=sha,format=short
 
-      - uses: docker/build-push-action@v6
+      - id: web-meta
+        if: env.PUSH == 'true'
+        uses: docker/metadata-action@v5
         with:
-          context: ${{ matrix.context }}
+          images: ${{ env.WEB_IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Publish api image
+        if: env.PUSH == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
           platforms: linux/amd64
-          push: ${{ env.PUSH == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+          push: true
+          tags: ${{ steps.api-meta.outputs.tags }}
+          labels: ${{ steps.api-meta.outputs.labels }}
+          cache-from: type=gha,scope=api
+
+      - name: Publish web image
+        if: env.PUSH == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.web-meta.outputs.tags }}
+          labels: ${{ steps.web-meta.outputs.labels }}
+          cache-from: type=gha,scope=web

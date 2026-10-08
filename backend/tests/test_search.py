@@ -206,7 +206,7 @@ def test_document_page_and_download(client, db, library):
     fid = file_id(db, "presupuesto 2025.docx")
     doc = client.get(f"/documents/{fid}").json()
     assert doc["index_status"] == "text" and "campaña" in doc["text_excerpt"]
-    assert doc["path"].endswith("Finance\\presupuesto 2025.docx") or doc["path"].endswith("Finance/presupuesto 2025.docx")
+    assert doc["path"] == str(library / "Finance" / "presupuesto 2025.docx")
 
     r = client.get(f"/documents/{fid}/download")
     assert r.status_code == 200 and r.content == (library / "Finance" / "presupuesto 2025.docx").read_bytes()
