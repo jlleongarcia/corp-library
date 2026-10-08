@@ -1,8 +1,8 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import (
-    JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, text,
+    JSON, BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
@@ -237,6 +237,67 @@ class Document(Base):
     title_vector: Mapped[Optional[str]] = mapped_column(SearchVector)
 
     file: Mapped[File] = relationship()
+
+
+# ── Phase 2: the folder plan ─────────────────────────────────────────────────
+
+class PlanFolder(Base):
+    """
+    One folder of the agreed structure: what it is for and what goes in it.
+
+    Matched to the scanned folders by path (case-insensitive, as Windows), not by
+    a foreign key: a planned folder may not exist yet, and a rescan or a refactor
+    may recreate the real one. A share's plan starts with its root (path ""), and
+    every other entry's parent is in the plan too.
+    """
+
+    __tablename__ = "plan_folders"
+    __table_args__ = (UniqueConstraint("share_id", "path_key", name="uq_plan_folders_share_path"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    share_id: Mapped[int] = mapped_column(ForeignKey("shares.id", ondelete="CASCADE"), index=True)
+    path: Mapped[str] = mapped_column(Text)  # relative to the share, "/"-separated, "" for the root
+    # Lower-cased path: what matching uses. Windows ignores case but not accents.
+    path_key: Mapped[str] = mapped_column(Text)
+    purpose: Mapped[str] = mapped_column(Text, default="")
+    belongs: Mapped[str] = mapped_column(Text, default="")  # what goes here
+    not_belongs: Mapped[str] = mapped_column(Text, default="")  # what doesn't, and where it goes instead
+    owner: Mapped[str] = mapped_column(String(200), default="")
+    naming: Mapped[str] = mapped_column(Text, default="")  # the convention, for people
+    # The convention, for the compliance report: see services/plan.py (e.g. "{YYYY}-{MM}-{DD} *").
+    naming_pattern: Mapped[Optional[str]] = mapped_column(String(300))
+    examples: Mapped[list[str]] = mapped_column(JSON, default=list)  # file names
+    extensions: Mapped[list[str]] = mapped_column(JSON, default=list)  # expected types; empty = any
+    keywords: Mapped[list[str]] = mapped_column(JSON, default=list)  # English and Spanish
+    # Files may be saved directly in this folder (False for folders that only group others).
+    allow_files: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Subfolders that aren't in the plan are fine here (one per project, year, ...);
+    # they follow this entry's rules.
+    allow_subfolders: Mapped[bool] = mapped_column(Boolean, default=False)
+    max_files: Mapped[Optional[int]] = mapped_column(Integer)  # "overgrown" above this; NULL = default
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_by: Mapped[Optional[str]] = mapped_column(String(100))
+
+
+class PlanSnapshot(Base):
+    """How far one share's refactor has come on one day: the compliance report's totals."""
+
+    __tablename__ = "plan_snapshots"
+    __table_args__ = (UniqueConstraint("share_id", "day", name="uq_plan_snapshots_share_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    share_id: Mapped[int] = mapped_column(ForeignKey("shares.id", ondelete="CASCADE"), index=True)
+    day: Mapped[date] = mapped_column(Date)
+    taken_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    files_total: Mapped[int] = mapped_column(Integer, default=0)
+    files_in_plan: Mapped[int] = mapped_column(Integer, default=0)
+    files_checked: Mapped[int] = mapped_column(Integer, default=0)  # in the plan, under a naming or type rule
+    files_misnamed: Mapped[int] = mapped_column(Integer, default=0)
+    files_wrong_type: Mapped[int] = mapped_column(Integer, default=0)
+    folders_planned: Mapped[int] = mapped_column(Integer, default=0)
+    folders_missing: Mapped[int] = mapped_column(Integer, default=0)
+    folders_empty: Mapped[int] = mapped_column(Integer, default=0)
+    folders_overgrown: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class AuditEvent(Base):

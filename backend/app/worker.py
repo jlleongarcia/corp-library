@@ -1,9 +1,9 @@
 """
 Background worker: `python -m app.worker`.
 
-Runs queued jobs (scans, principal resolution, indexing, duplicate detection),
-enqueues the nightly full pipeline at SCAN_HOUR local time, and once a day
-removes expired sessions and old audit events.
+Runs queued jobs (scans, principal resolution, indexing, duplicate detection,
+folder-plan snapshots), enqueues the nightly full pipeline at SCAN_HOUR local
+time, and once a day removes expired sessions and old audit events.
 """
 
 import logging
@@ -17,7 +17,7 @@ from sqlalchemy import delete, select
 from .config import settings
 from .database import SessionLocal
 from .models import AuthSession, Job, Share, User
-from .services import audit, jobs
+from .services import audit, jobs, plan
 from .services.dedupe import run_dedupe
 from .services.directory import open_directory, resolve_principals
 from .services.indexer import run_index
@@ -32,8 +32,9 @@ POLL_SECONDS = 5
 # loading the file server during working hours.
 CATCH_UP = timedelta(hours=4)
 HOUSEKEEPING_EVERY = timedelta(days=1)
-# Content indexing runs after scans and name resolution, before duplicates.
-RESOLVE_PRIORITY, INDEX_PRIORITY, DEDUPE_PRIORITY = 110, 115, 120
+# Content indexing runs after scans and name resolution, before duplicates. The
+# folder-plan snapshot only needs the scan, but is the least urgent.
+RESOLVE_PRIORITY, INDEX_PRIORITY, DEDUPE_PRIORITY, COMPLIANCE_PRIORITY = 110, 115, 120, 125
 _stop = False
 
 
@@ -56,6 +57,7 @@ def run_job(db, job: Job) -> None:
             jobs.enqueue(db, jobs.RESOLVE, priority=RESOLVE_PRIORITY)
             jobs.enqueue(db, jobs.INDEX, priority=INDEX_PRIORITY)
             jobs.enqueue(db, jobs.DEDUPE, priority=DEDUPE_PRIORITY)
+            jobs.enqueue(db, jobs.COMPLIANCE, priority=COMPLIANCE_PRIORITY)
     elif job.kind == jobs.RESOLVE:
         directory = open_directory()
         try:
@@ -72,6 +74,9 @@ def run_job(db, job: Job) -> None:
             jobs.enqueue(db, jobs.INDEX, priority=INDEX_PRIORITY + 10)
     elif job.kind == jobs.DEDUPE:
         run_dedupe(db)
+    elif job.kind == jobs.COMPLIANCE:
+        n = plan.take_snapshots(db)
+        logger.info("Folder plan: recorded today's progress for %d share(s).", n)
     else:
         raise RuntimeError(f"Unknown job kind {job.kind}")
 

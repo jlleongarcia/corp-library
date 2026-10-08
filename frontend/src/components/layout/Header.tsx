@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { BookOpen, FolderTree, LogOut, Search, ShieldCheck } from 'lucide-react'
+import { BookOpen, FolderTree, LogOut, Map, Search, ShieldCheck } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 import { cn } from '../../lib/utils'
 
@@ -37,6 +37,7 @@ export default function Header() {
         <nav className="flex items-center gap-1">
           <NavItem to="/" end icon={<Search className="w-4 h-4" />} label="Search" />
           <NavItem to="/browse" icon={<FolderTree className="w-4 h-4" />} label="Browse" />
+          <NavItem to="/guide" icon={<Map className="w-4 h-4" />} label="Folder guide" />
           {user?.is_admin && <NavItem to="/admin" icon={<ShieldCheck className="w-4 h-4" />} label="Admin" />}
         </nav>
 

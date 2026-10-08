@@ -1,8 +1,10 @@
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronRight, EyeOff, Folder, HardDrive } from 'lucide-react'
+import { useState } from 'react'
+import { AlertTriangle, ChevronDown, ChevronRight, EyeOff, Folder, HardDrive, Map } from 'lucide-react'
 import api from '../lib/api'
-import type { BrowseResponse, BrowseShare } from '../types'
+import type { BrowseResponse, BrowseShare, FolderPlacement } from '../types'
+import { PlanDetails } from '../components/plan'
 import { formatDate, formatFileSize } from '../lib/utils'
 import { EmptyState } from '../components/ui'
 import { CopyPathButton, FileTypeBadge } from '../components/library'
@@ -77,6 +79,8 @@ function FolderView({ folderId }: { folderId: number }) {
         <CopyPathButton path={v.folder.path} label="Copy folder path" />
       </div>
 
+      {v.plan && <PlanPanel plan={v.plan} />}
+
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm divide-y divide-gray-100">
         {v.folders.map((f) => (
           <Link key={f.id} to={`/browse/${f.id}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50">
@@ -105,6 +109,46 @@ function FolderView({ folderId }: { folderId: number }) {
           <p className="px-4 py-6 text-sm text-gray-500 text-center">This folder is empty.</p>
         )}
       </div>
+    </div>
+  )
+}
+
+/** What the folder plan says about this folder: its guide, or that it isn't part of the plan. */
+function PlanPanel({ plan }: { plan: FolderPlacement }) {
+  const [open, setOpen] = useState(false)
+  const entry = plan.entry
+  if (plan.status === 'outside') {
+    return (
+      <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+        <p>
+          This folder isn't part of the department's folder plan, so new documents shouldn't be saved here.{' '}
+          {entry && <Link to={`/guide#plan-${entry.id}`} className="font-medium underline">See where they belong</Link>}
+        </p>
+      </div>
+    )
+  }
+  if (!entry) return null
+  const inherited = plan.status === 'free'
+  return (
+    <div className="rounded-xl border border-blue-200 bg-blue-50/60">
+      <button onClick={() => setOpen(!open)} aria-expanded={open}
+        className="w-full flex items-start gap-2 px-4 py-3 text-left text-sm">
+        <Map className="w-4 h-4 mt-0.5 text-blue-700 flex-shrink-0" />
+        <span className="flex-1 min-w-0">
+          <span className="font-medium text-blue-900">
+            {inherited ? `Part of “${entry.name}” in the folder plan` : 'Folder guide'}
+          </span>
+          {entry.purpose && <span className="block text-gray-700">{entry.purpose}</span>}
+        </span>
+        {open ? <ChevronDown className="w-4 h-4 text-blue-700" /> : <ChevronRight className="w-4 h-4 text-blue-700" />}
+      </button>
+      {open && (
+        <div className="px-4 pb-4 pl-10 space-y-3">
+          <PlanDetails entry={{ ...entry, purpose: '' }} />
+          <Link to={`/guide#plan-${entry.id}`} className="inline-block text-sm text-blue-700 hover:underline">Open in the folder guide</Link>
+        </div>
+      )}
     </div>
   )
 }

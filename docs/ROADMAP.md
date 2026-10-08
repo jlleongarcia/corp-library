@@ -1,6 +1,6 @@
 # Corp Library — Roadmap
 
-_Last updated: 2026-10-08 (phase 1 implemented and audited; waiting on IT for SSO and real-user verification)_
+_Last updated: 2026-10-08 (phase 2 implemented; phase 1 waiting on IT for SSO and real-user verification)_
 
 Corp Library is an internal web app that helps our department (~15 people) find documents on the
 department shares and decide where new documents belong. It indexes the 5 top-level shares on the
@@ -194,14 +194,45 @@ Phase 1 audit (2026-10-08, BUG-023 to BUG-034):
 
 _Goal: the agreed structure becomes data the app (and later the assistant) uses._
 
-- [ ] Folder-plan model: path, purpose, owner, what belongs/doesn't, naming convention, examples,
+- [x] Folder-plan model: path, purpose, owner, what belongs/doesn't, naming convention, examples,
       keywords (EN + ES)
-- [ ] Admin editor + read-only "folder guide" for everyone
-- [ ] Compliance report: files outside the plan, naming violations, empty or overgrown folders
-- [ ] Track the refactor's progress over time (per share)
+- [x] Admin editor + read-only "folder guide" for everyone
+- [x] Compliance report: files outside the plan, naming violations, empty or overgrown folders
+- [x] Track the refactor's progress over time (per share)
+- [ ] The department's real plan entered in the app (needs the first real scan, then the folder-plan meetings)
 
 **Exit:** the department's folder plan is complete in the app and used as the reference during the
 refactor.
+**Blocked by IT:** nothing new; the real plan needs phase 0's first real scan.
+
+Notes from implementation:
+- **Model:** one `plan_folders` row per planned folder (migration `0005`), keyed by share + path and
+  matched to scanned folders by path, ignoring case as Windows does (not accents: Windows tells
+  "Información" and "Informacion" apart). No foreign key to `folders`: a planned folder may not exist yet,
+  and a refactor recreates real ones. A plan starts at the share's root and every entry's parent is in it,
+  so it is always a tree; moving or renaming an entry moves what is planned below it.
+- **Where a folder stands:** *planned* (it's an entry), *free* (an unlisted subfolder of an entry that
+  allows them, e.g. one per project; it follows that entry's rules) or *outside*. Entries that only group
+  others (the root, by default) can refuse files; files saved there count as outside the plan.
+- **Naming rules** are a small pattern language instead of regexes, so non-developers can read them:
+  `*`, `?`, `{YYYY}`, `{YY}`, `{MM}`, `{DD}`, `{N}`, checked against the name without its extension,
+  ignoring case and accents. Expected file types are a separate list. The editor warns when an entry's own
+  examples break its rules. Keywords are one list holding both languages.
+- **Starting a plan:** "Import existing folders" (1–4 levels) creates entries from the last scan; the
+  deepest level allows subfolders, so nothing below it is flagged. Then describe, prune and add.
+- **Folder guide** (`/guide`, everyone): shows an entry only if the user can list its folder in Explorer
+  (or, for a folder not created yet, the nearest existing one above it), like browsing. Filter box with
+  accent-insensitive matching on names, purposes and keywords, a first, rule-based "where does this go?".
+  Browsing a folder shows its guide, or a warning that it isn't part of the plan.
+- **Compliance** is computed on request from the last scan (admin, per share, CSV export). The worker
+  records its totals once a day per share in `plan_snapshots` (a `compliance` job queued after every
+  scan batch, or "Record now"); the Compliance tab charts files in the plan and correctly named files over
+  time. "Overgrown" = more than 500 files directly in a folder unless the entry sets its own limit.
+- **Privacy:** the plan's only personal data are each folder's owner (shown to colleagues in the guide)
+  and the admin who last edited an entry: work-role data, but mention it to the DPO with the rest of the
+  go-live checklist. Viewing the guide is not audit-logged, so the privacy notice is unchanged.
+- **Phase 3 hooks:** `services/plan.py` exposes the plan (`entries`, `place`, `guide`) and the
+  keywords that `get_folder_plan` / `suggest_destination` and the no-LLM fallback will use.
 
 ### Phase 3 — Local AI assistant
 

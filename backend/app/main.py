@@ -7,7 +7,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import dev_mode_problem, settings
 from .database import engine
-from .routers import admin, auth, library, privacy, reports
+from .routers import admin, auth, library, plan, privacy, reports
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,7 +24,7 @@ if settings.dev_mode and (problem := dev_mode_problem(settings)):
 app = FastAPI(
     title=settings.app_name,
     description="Department document library: search and browse the shares with Windows permissions.",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 # The UI is served by nginx on the same origin and proxies /api, so no CORS is needed.
@@ -32,6 +32,8 @@ app.include_router(auth.router)
 app.include_router(library.router)
 app.include_router(admin.router)
 app.include_router(reports.router)
+app.include_router(plan.router)
+app.include_router(plan.admin)
 app.include_router(privacy.router)
 
 if not settings.dev_mode and (missing := privacy.missing_settings()):

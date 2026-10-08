@@ -10,7 +10,7 @@ Windows permissions, and (from phase 3) adds a local AI assistant that never sen
 - **Deploying and running it:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 - **Privacy notice and why it's needed:** [docs/PRIVACY.md](docs/PRIVACY.md)
 
-## Current state: phase 1 (search)
+## Current state: phase 2 (folder plan)
 
 Everyone signs in with their Windows account (Kerberos single sign-on, or the sign-in form) and can:
 
@@ -20,6 +20,9 @@ Everyone signs in with their Windows account (Kerberos single sign-on, or the si
 - **Browse** the shares folder by folder
 - Open a **document page**: metadata, PDF/image preview, download, and **copy network path** to open
   it in place from Explorer
+- Read the **folder guide**: the department's agreed folder structure, what goes in each folder and
+  what doesn't, how to name files, the owner and keywords, with a "what are you saving?" filter. Browsing
+  a folder shows its guide, or warns that it isn't part of the plan
 
 Each person only sees what Windows lets them open: results are filtered by their AD groups against the
 file server's permissions (including files with permissions of their own), and every download
@@ -38,7 +41,12 @@ The admin console (from phase 0) shows:
 | Hygiene | Paths too long for Windows, over-nested folders, empty folders |
 
 Every report exports to CSV (opens directly in Excel). The admin console also shows the search index
-status and the audit log.
+status and the audit log. From phase 2 it also has:
+
+| Tab | What it does |
+| --- | --- |
+| Folder plan | Edit each share's plan (start from the existing folders or from scratch): purpose, what belongs, owner, naming pattern, file types, keywords. Exports to CSV for the folder-plan meetings |
+| Compliance | Files outside the plan, misnamed files, unexpected file types, planned folders not created yet or empty, overgrown folders; and a chart of the refactor's progress per share, recorded daily after the nightly scan |
 
 ## Layout
 
@@ -47,11 +55,11 @@ backend/            FastAPI API + background worker (same image)
   app/acl/          Windows security descriptor parser and access evaluation
   app/auth/         sessions, Kerberos SSO, LDAP sign-in, dev identities
   app/services/     scanner, sources, LDAP directory, indexer + extraction, search, library
-                    (browse/documents), access filter, audit, dedupe, reports, job queue
+                    (browse/documents), access filter, audit, dedupe, reports, folder plan, job queue
   alembic/          database migrations
   scripts/          dev.py (local stack without Docker), pytest_postgres.py
   tests/            pytest suite (SQLite by default, PostgreSQL via scripts/pytest_postgres.py)
-frontend/           React + Vite + Tailwind UI (search, browse, admin console), served by nginx
+frontend/           React + Vite + Tailwind UI (search, browse, folder guide, admin console), served by nginx
 deploy/backup.sh    nightly pg_dump
 docker-compose.yml  db, api, worker, web, backup (app images pulled from ghcr.io)
 .github/workflows/  CI: tests on every push; image publishing to ghcr.io is off until PUBLISH_IMAGES=true
@@ -103,7 +111,9 @@ npm run dev                  # http://localhost:5173, proxies /api to the backen
 
 Sign in as `admin` (no password), add a local folder as a share (e.g.
 `C:\Users\you\Documents\test-share`) and scan it. The worker then indexes it; search it from the
-home page. OCR of scanned PDFs needs [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki) with
+home page. To try the folder plan, open **Admin → Folder plan**, import the existing folders, describe
+a few, then look at **Compliance** and the **Folder guide** (sign in as another dev user to see it
+filtered by permissions). OCR of scanned PDFs needs [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki) with
 the Spanish data on your `PATH`; without it those PDFs are found by name only.
 
 **Testing permissions locally.** Local folders have no usable Windows ACLs, so in DEV_MODE everyone can

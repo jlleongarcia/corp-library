@@ -164,6 +164,7 @@ class BrowseResponse(BaseModel):
     files: list[BrowseFile]
     files_hidden: bool
     files_truncated: bool
+    plan: Optional["FolderPlacement"] = None  # None: the share has no folder plan
 
 
 class DocumentDetail(BaseModel):
@@ -183,6 +184,86 @@ class DocumentDetail(BaseModel):
     preview: Optional[str]  # pdf | image: can be shown inline
     text_excerpt: Optional[str]
     text_truncated: bool
+
+
+# ── Folder plan ───────────────────────────────────────────────────────────────
+
+LONG_TEXT = 10_000
+
+
+class PlanFolderFields(BaseModel):
+    """What an admin can set on a plan entry. On update, only the fields sent change."""
+
+    purpose: Optional[str] = Field(default=None, max_length=LONG_TEXT)
+    belongs: Optional[str] = Field(default=None, max_length=LONG_TEXT)
+    not_belongs: Optional[str] = Field(default=None, max_length=LONG_TEXT)
+    owner: Optional[str] = Field(default=None, max_length=200)
+    naming: Optional[str] = Field(default=None, max_length=LONG_TEXT)
+    naming_pattern: Optional[str] = Field(default=None, max_length=300)
+    examples: Optional[list[str]] = Field(default=None, max_length=50)
+    extensions: Optional[list[str]] = Field(default=None, max_length=50)
+    keywords: Optional[list[str]] = Field(default=None, max_length=100)
+    allow_files: Optional[bool] = None
+    allow_subfolders: Optional[bool] = None
+    max_files: Optional[int] = Field(default=None, ge=1, le=1_000_000)
+
+
+class PlanFolderCreate(PlanFolderFields):
+    share_id: int
+    path: str = Field(max_length=2000, description='Relative to the share, "" for its root')
+
+
+class PlanFolderUpdate(PlanFolderFields):
+    path: Optional[str] = Field(default=None, max_length=2000, description="Moves or renames the entry")
+
+
+class PlanImport(BaseModel):
+    share_id: int
+    depth: int = Field(default=2, ge=1, le=6)
+
+
+class PlanGuideEntry(BaseModel):
+    id: int
+    share_id: int
+    share: str
+    path: str
+    name: str
+    depth: int
+    network_path: str
+    purpose: str
+    belongs: str
+    not_belongs: str
+    owner: str
+    naming: str
+    naming_pattern: Optional[str]
+    examples: list[str]
+    extensions: list[str]
+    keywords: list[str]
+    allow_files: bool
+    allow_subfolders: bool
+    folder_id: Optional[int]  # its folder, when it exists and the user can browse it
+
+
+class PlanEntryAdmin(PlanGuideEntry):
+    max_files: Optional[int]
+    exists: bool  # the folder is on the share (as of the last scan)
+    example_problems: list[str]  # examples its own rules would reject
+    updated_at: datetime
+    updated_by: Optional[str]
+
+
+class PlanGuideShare(BaseModel):
+    share_id: int
+    share: str
+    path: str
+    entries: list[PlanGuideEntry]
+
+
+class FolderPlacement(BaseModel):
+    """Where a browsed folder stands in its share's plan."""
+
+    status: str  # planned | free (an unlisted subfolder its plan allows) | outside
+    entry: Optional[PlanGuideEntry]  # its entry, the one whose rules it follows, or where its files could go
 
 
 # ── Privacy notice ────────────────────────────────────────────────────────────
@@ -216,3 +297,6 @@ class AuditEventPublic(BaseModel):
     client_ip: Optional[str]
 
     model_config = {"from_attributes": True}
+
+
+BrowseResponse.model_rebuild()  # its `plan` refers to FolderPlacement, defined below it

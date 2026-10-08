@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from ..acl.descriptor import parse_security_descriptor
 from ..acl.evaluate import can_read
 from ..models import Document, File, Folder, Share
+from . import plan
 from .access import file_access, listable_folder_acl_ids
 from .search import file_path
 from .sources import FileSource, source_for
@@ -114,6 +115,20 @@ def browse(db: Session, token: frozenset[str], folder_id: int) -> dict:
         ],
         "files_hidden": files_hidden,  # can list the folder but not open its files
         "files_truncated": len(files) > MAX_FILES_LISTED,
+        "plan": _placement(db, share, folder),
+    }
+
+
+def _placement(db: Session, share: Share, folder: Folder) -> Optional[dict]:
+    """The folder guide for this folder: its plan entry, or the one it falls under."""
+    placed = plan.placement_for_folder(db, share.id, folder.path)
+    if placed is None:
+        return None
+    entry = placed.entry
+    return {
+        "status": placed.status,
+        "entry": plan.entry_dict(entry, share, folder_id=folder.id if placed.status == "planned" else None)
+        if entry else None,
     }
 
 

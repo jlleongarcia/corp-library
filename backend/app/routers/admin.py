@@ -84,8 +84,11 @@ def request_scan(
 def request_job(
     kind: str, retry: bool = False, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)
 ):
-    """resolve_principals (forced refresh), dedupe, or index (`retry=true` re-reads failed files)."""
-    if kind not in (jobs.RESOLVE, jobs.DEDUPE, jobs.INDEX):
+    """
+    resolve_principals (forced refresh), dedupe, index (`retry=true` re-reads failed files),
+    or compliance (record today's folder-plan progress now).
+    """
+    if kind not in (jobs.RESOLVE, jobs.DEDUPE, jobs.INDEX, jobs.COMPLIANCE):
         raise HTTPException(status_code=400, detail=f"Unknown job kind: {kind}")
     payload = {"force": True} if kind == jobs.RESOLVE else {"retry": True} if kind == jobs.INDEX and retry else {}
     return jobs.enqueue(db, kind, payload, requested_by=user.username)

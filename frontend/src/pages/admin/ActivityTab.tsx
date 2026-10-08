@@ -30,6 +30,7 @@ function duration(a: string | null, b: string | null) {
 
 const JOB_LABEL: Record<Job['kind'], string> = {
   scan: 'Scan', resolve_principals: 'Resolve users & groups', dedupe: 'Find duplicates', index: 'Index content',
+  compliance: 'Folder plan progress',
 }
 
 const INDEX_LABELS: [keyof IndexStatusReport['counts'], string, string][] = [

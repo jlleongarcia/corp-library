@@ -86,6 +86,8 @@ export interface BrowseResponse {
   files: { file_id: number; name: string; extension: string; size: number; mtime: string | null }[]
   files_hidden: boolean
   files_truncated: boolean
+  /** null: the share has no folder plan */
+  plan: FolderPlacement | null
 }
 
 export type IndexStatus =
@@ -147,7 +149,7 @@ export type JobStatus = 'queued' | 'running' | 'done' | 'failed'
 
 export interface Job {
   id: number
-  kind: 'scan' | 'resolve_principals' | 'dedupe' | 'index'
+  kind: 'scan' | 'resolve_principals' | 'dedupe' | 'index' | 'compliance'
   payload: Record<string, unknown>
   status: JobStatus
   requested_by: string | null
@@ -243,4 +245,97 @@ export interface AclException {
   null_dacl: boolean
   acl_error: string | null
   entries: (PrincipalRef & { type: 'allow' | 'deny'; level: AccessLevel; inherited: boolean })[]
+}
+
+// ── Folder plan ───────────────────────────────────────────────────────────────
+
+export interface PlanGuideEntry {
+  id: number
+  share_id: number
+  share: string
+  /** relative to the share, "/"-separated, "" for its root */
+  path: string
+  name: string
+  depth: number
+  network_path: string
+  purpose: string
+  belongs: string
+  not_belongs: string
+  owner: string
+  naming: string
+  naming_pattern: string | null
+  examples: string[]
+  extensions: string[]
+  keywords: string[]
+  allow_files: boolean
+  allow_subfolders: boolean
+  /** its folder, when it exists and the user can browse it */
+  folder_id: number | null
+}
+
+export interface PlanEntryAdmin extends PlanGuideEntry {
+  max_files: number | null
+  /** the folder is on the share (as of the last scan) */
+  exists: boolean
+  /** examples its own rules would reject */
+  example_problems: string[]
+  updated_at: string
+  updated_by: string | null
+}
+
+export interface PlanGuideShare {
+  share_id: number
+  share: string
+  path: string
+  entries: PlanGuideEntry[]
+}
+
+export interface FolderPlacement {
+  /** free: a subfolder its plan entry allows without listing it */
+  status: 'planned' | 'free' | 'outside'
+  entry: PlanGuideEntry | null
+}
+
+export interface ComplianceTotals {
+  files_total: number
+  files_in_plan: number
+  /** in the plan and under a naming or file-type rule */
+  files_checked: number
+  files_misnamed: number
+  files_wrong_type: number
+  folders_planned: number
+  folders_missing: number
+  folders_empty: number
+  folders_overgrown: number
+}
+
+interface Capped<T> {
+  count: number
+  items: T[]
+}
+
+export interface ComplianceReport {
+  share_id: number
+  share: string
+  totals: ComplianceTotals
+  outside: Capped<{
+    path: string; folder_id: number; files: number; reason: 'not_in_plan' | 'no_files_here'
+    plan_id: number | null; plan_path: string | null
+  }>
+  misnamed: Capped<{ path: string; pattern: string; plan_id: number; plan_path: string }>
+  wrong_type: Capped<{ path: string; extension: string; allowed: string[]; plan_id: number; plan_path: string }>
+  missing: Capped<{ plan_id: number; path: string }>
+  empty: Capped<{ plan_id: number; path: string }>
+  overgrown: Capped<{ path: string; folder_id: number; files: number; limit: number }>
+}
+
+export interface ComplianceSnapshot extends ComplianceTotals {
+  day: string
+  taken_at: string
+}
+
+export interface ComplianceProgress {
+  share_id: number
+  share: string
+  snapshots: ComplianceSnapshot[]
 }

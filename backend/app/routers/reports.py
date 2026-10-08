@@ -6,14 +6,15 @@ import json
 from datetime import date, datetime
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..auth.sessions import CurrentUser, require_admin
 from ..database import get_db
+from ..models import Share
 from ..schemas import AuditEventPublic
-from ..services import audit, reports
+from ..services import audit, plan, reports
 
 router = APIRouter(prefix="/admin/reports", tags=["reports"], dependencies=[Depends(require_admin)])
 
@@ -158,3 +159,62 @@ def audit_log(
         ]
         return _csv(rows, "audit")
     return {"total": data["total"], "events": [AuditEventPublic.model_validate(e) for e in data["events"]]}
+
+
+# ── Folder plan (phase 2) ─────────────────────────────────────────────────────
+
+@router.get("/plan")
+def plan_export(share_id: Optional[int] = None, format: Format = "csv", db: Session = Depends(get_db)):
+    """The plan itself, for the folder-plan meeting or a printout."""
+    rows = [
+        {"share": e["share"], "folder": e["network_path"], "purpose": e["purpose"], "belongs": e["belongs"],
+         "does_not_belong": e["not_belongs"], "owner": e["owner"], "naming": e["naming"],
+         "naming_pattern": e["naming_pattern"] or "", "examples": " | ".join(e["examples"]),
+         "file_types": ", ".join(e["extensions"]), "keywords": ", ".join(e["keywords"]),
+         "files_here": "yes" if e["allow_files"] else "no",
+         "other_subfolders": "yes" if e["allow_subfolders"] else "no",
+         "max_files": e["max_files"] or "", "exists": "yes" if e["exists"] else "not yet"}
+        for e in plan.admin_view(db, share_id)
+    ]
+    return _csv(rows, "folder-plan") if format == "csv" else rows
+
+
+@router.get("/compliance")
+def compliance(
+    share_id: int, limit: int = Query(200, ge=1, le=5000), format: Format = "json", db: Session = Depends(get_db),
+):
+    """How one share follows its plan, computed now from the last scan."""
+    share = db.get(Share, share_id)
+    if share is None:
+        raise HTTPException(status_code=404, detail="Share not found")
+    data = plan.evaluate(db, share, limit)
+    if data is None:
+        raise HTTPException(status_code=404, detail="This share has no folder plan yet")
+    if format == "csv":
+        rows = (
+            [{"issue": "outside the plan" if i["reason"] == "not_in_plan" else "files not allowed here",
+              "path": i["path"], "detail": f"{i['files']} files", "plan_folder": i["plan_path"] or ""}
+             for i in data["outside"]["items"]]
+            + [{"issue": "naming", "path": i["path"], "detail": i["pattern"], "plan_folder": i["plan_path"]}
+               for i in data["misnamed"]["items"]]
+            + [{"issue": "file type", "path": i["path"], "detail": f".{i['extension']} (expected {', '.join(i['allowed'])})",
+                "plan_folder": i["plan_path"]} for i in data["wrong_type"]["items"]]
+            + [{"issue": "planned folder missing", "path": i["path"], "detail": "", "plan_folder": i["path"]}
+               for i in data["missing"]["items"]]
+            + [{"issue": "planned folder empty", "path": i["path"], "detail": "", "plan_folder": i["path"]}
+               for i in data["empty"]["items"]]
+            + [{"issue": "overgrown", "path": i["path"], "detail": f"{i['files']} files (limit {i['limit']})",
+                "plan_folder": ""} for i in data["overgrown"]["items"]]
+        )
+        return _csv(rows, f"compliance-{share.name}")
+    return data
+
+
+@router.get("/compliance/progress")
+def compliance_progress(days: int = Query(plan.HISTORY_DAYS, ge=1, le=3650), format: Format = "json",
+                        db: Session = Depends(get_db)):
+    """The daily snapshots per share (taken after each nightly scan, or on request)."""
+    data = plan.progress(db, days)
+    if format == "csv":
+        return _csv([{"share": s["share"], **snap} for s in data for snap in s["snapshots"]], "plan-progress")
+    return data
