@@ -132,6 +132,21 @@ def test_accents_stems_names_and_content(client, library):
     assert names(client, "presupuesto -campaña") == []
 
 
+def test_excluded_words_and_phrases(client, db, library):
+    sign_in(client, "alice")
+    everything = names(client, "")
+    assert names(client, "-campaña") == [n for n in everything if n != "presupuesto 2025.docx"]
+    assert names(client, 'presupuesto -"informacion anual"') == []
+    assert names(client, 'presupuesto -"anual informacion"') == ["presupuesto 2025.docx"]  # not that phrase
+    if db.get_bind().dialect.name == "sqlite":
+        pytest.skip("stemmed exclusions need PostgreSQL full-text search")
+    # The content says "información"; another form of the word must exclude it too.
+    # Each query runs as typed, as Spanish and as English stems: an exclusion
+    # only one of them notices used to let the document through.
+    assert names(client, "presupuesto -informaciones") == []
+    assert names(client, "presupuesto -campañas") == []
+
+
 def test_results_carry_snippet_and_network_path(client, library):
     sign_in(client, "alice")
     [hit] = client.get("/search", params={"q": "informacion"}).json()["results"]

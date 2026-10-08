@@ -57,13 +57,18 @@ def file_path(share: Share, folder_path: str, name: str) -> str:
     return display_path(share.path, folder_path, name)
 
 
-def _tsquery(q: str):
+def _tsquery(q: str, parse=func.websearch_to_tsquery):
     configs = ("simple", "spanish", "english")
-    parts = [func.websearch_to_tsquery(literal_column(f"'{c}'::regconfig"), q) for c in configs]
+    parts = [parse(literal_column(f"'{c}'::regconfig"), q) for c in configs]
     query = parts[0]
     for p in parts[1:]:
         query = query.op("||")(p)
     return query
+
+
+def _matches(q: str, parse=func.websearch_to_tsquery):
+    # NULL vector (no document row yet) counts as no match.
+    return func.coalesce(Document.search_vector.op("@@")(_tsquery(q, parse)), False)
 
 
 def search(db: Session, token: frozenset[str], p: SearchParams) -> dict:
@@ -87,9 +92,14 @@ def search(db: Session, token: frozenset[str], p: SearchParams) -> dict:
                 *[func.coalesce(func.instr(Document.search_vector, t), 0) == 0 for t in parsed.excluded],
             )
         else:
-            tsq = _tsquery(parsed.text)
-            stmt = stmt.where(Document.search_vector.op("@@")(tsq))
-            rank = func.ts_rank_cd(Document.search_vector, tsq)
+            if parsed.terms:
+                tsq = _tsquery(parsed.text)
+                stmt = stmt.where(Document.search_vector.op("@@")(tsq))
+                rank = func.ts_rank_cd(Document.search_vector, tsq)
+            # Each exclusion is matched as typed and stemmed in both languages, and
+            # any match rejects the document. (Left inside the OR-ed query above, a
+            # stemming that didn't notice the word would let the document through.)
+            stmt = stmt.where(*[~_matches(e, func.phraseto_tsquery) for e in parsed.excluded])
 
     if p.share_id:
         stmt = stmt.where(File.share_id == p.share_id)

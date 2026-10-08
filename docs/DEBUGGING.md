@@ -45,6 +45,7 @@ Run every check with `cd backend && uv run pytest` (SQLite) and `uv run scripts/
 | [BUG-018](#bug-018) | Low | Healthchecks may go through the corporate proxy | Before production | 🟡 | `api` turns healthy on the server |
 | [BUG-019](#bug-019) | Low | Two workers would scan the same share concurrently | Before production | ⬜ | — |
 | [BUG-020](#bug-020) | Low | Compose header says `up -d --build` but nothing builds | Before production | ✅ | Comment only |
+| [BUG-021](#bug-021) | Medium | `-word` doesn't exclude other forms of the word | Before production | ✅ | `test_search.py::test_excluded_words_and_phrases` (PostgreSQL) |
 
 ---
 
@@ -273,6 +274,18 @@ the unique constraints.
 **Compose header says `docker compose up -d --build`,** but images come from ghcr.io; nothing builds.
 
 - **Fix:** the comment says `docker compose pull && docker compose up -d`.
+- **Status:** ✅ Fixed.
+
+### BUG-021
+
+**`-word` doesn't exclude other forms of the word.** Each query runs three ways (as typed, Spanish
+stems, English stems) OR-ed together, and the exclusion was inside each one. Document text is stored
+as stems only, so for `contrato -informes` the "as typed" query never saw `informes` in a document
+saying "informes" and let it through.
+
+- **Fix:** `parse_query` takes `-word` and `-"phrase"` out of the query; `search.py` rejects a document
+  when any of the three forms of each exclusion matches. `-INF-2023` excludes the phrase "inf 2023".
+- **Files:** `backend/app/services/text.py`, `backend/app/services/search.py`
 - **Status:** ✅ Fixed.
 
 ---

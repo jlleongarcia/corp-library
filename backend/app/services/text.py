@@ -55,25 +55,27 @@ def clean_content(s: str, max_chars: int) -> str:
 
 @dataclass
 class ParsedQuery:
-    text: str  # for websearch_to_tsquery: words, "phrases", -exclusions, or
+    text: str  # for websearch_to_tsquery: words, "phrases", or (exclusions taken out)
     terms: list[str] = field(default_factory=list)  # positive words, for highlighting
-    excluded: list[str] = field(default_factory=list)
+    excluded: list[str] = field(default_factory=list)  # -word and -"a phrase", applied separately
+
+
+_EXCLUSION = re.compile(r'(?:^|(?<=\s))-(?:"([^"]*)"?|([^\s"]+))')
 
 
 def parse_query(q: str) -> ParsedQuery:
     q = fold(q)
-    # Keep what websearch syntax understands (quotes, leading minus); everything else
-    # splits words, as it did when the names were indexed ("INF-2023.pdf" -> inf 2023 pdf).
-    q = re.sub(r"(?<=\w)[^\w\s\"]+(?=\w)|_", " ", q)
-    q = re.sub(r"[^\w\s\"-]", " ", q)
+    # Exclusions come out of the query: search.py must reject a document if any
+    # stemming of the excluded words matches, not just one of them. "-INF-2023"
+    # excludes the phrase "inf 2023", as the name was indexed.
+    excluded = [words(m[0] or m[1]) for m in _EXCLUSION.findall(q)]
+    q = _EXCLUSION.sub(" ", q)
+    # Keep what websearch syntax understands (quotes); everything else splits
+    # words, as it did when the names were indexed ("INF-2023.pdf" -> inf 2023 pdf).
+    q = re.sub(r"[^\w\s\"]|_", " ", q)
     q = re.sub(r"\s+", " ", q).strip()
-    terms, excluded = [], []
-    for token in re.findall(r"-?\w+", q):
-        if token.startswith("-"):
-            excluded.append(token[1:])
-        elif token != "or":
-            terms.append(token)
-    return ParsedQuery(text=q, terms=terms, excluded=excluded)
+    terms = [t for t in re.findall(r"\w+", q) if t != "or"]
+    return ParsedQuery(text=q, terms=terms, excluded=[e for e in excluded if e])
 
 
 # ── Snippets ──────────────────────────────────────────────────────────────────

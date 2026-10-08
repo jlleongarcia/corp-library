@@ -1,7 +1,7 @@
 import { type FormEvent, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Download, Search, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CircleHelp, Download, Search, X } from 'lucide-react'
 import api, { apiUrl } from '../lib/api'
 import type { SearchFilters, SearchResponse, SearchResult } from '../types'
 import { formatDate, formatFileSize } from '../lib/utils'
@@ -22,6 +22,7 @@ export default function SearchPage() {
   const sort = params.get('sort') ?? 'relevance'
   const hasFilters = FILTER_KEYS.some((k) => params.get(k))
   const [draft, setDraft] = useState(q)
+  const [showHelp, setShowHelp] = useState(false)
   useEffect(() => setDraft(q), [q])
 
   const filters = useQuery<SearchFilters>({
@@ -85,7 +86,18 @@ export default function SearchPage() {
           />
         </div>
         <Button type="submit" className="px-5">Search</Button>
+        <Button type="button" variant="ghost" className="px-3" onClick={() => setShowHelp((v) => !v)}
+                aria-expanded={showHelp} aria-controls="search-help" title="Search tips">
+          <CircleHelp className="w-5 h-5" /><span className="hidden sm:inline">Tips</span>
+        </Button>
       </form>
+
+      {showHelp && (
+        <SearchHelp
+          onClose={() => setShowHelp(false)}
+          onTry={(example) => { setDraft(example); update({ q: example }) }}
+        />
+      )}
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <select
@@ -136,11 +148,20 @@ export default function SearchPage() {
       ) : !searching ? (
         <RecentDocuments results={results.data?.results ?? []} />
       ) : total === 0 ? (
-        <EmptyState
-          icon={<Search className="w-12 h-12" />}
-          title="No documents found"
-          description="Try other words, fewer words, or remove filters. You only see documents you can open on the file server."
-        />
+        <div className="space-y-2">
+          <EmptyState
+            icon={<Search className="w-12 h-12" />}
+            title="No documents found"
+            description="Try other words, fewer words, or remove filters. You only see documents you can open on the file server."
+          />
+          {!showHelp && (
+            <p className="text-center text-sm">
+              <button type="button" onClick={() => setShowHelp(true)} className="text-blue-700 hover:underline">
+                See search tips
+              </button>
+            </p>
+          )}
+        </div>
       ) : (
         <div className="space-y-3">
           <p className="text-sm text-gray-500">
@@ -207,7 +228,7 @@ function RecentDocuments({ results }: { results: SearchResult[] }) {
         <p className="mt-1 text-blue-800">
           Words match names, folders and the text inside documents, in English or Spanish, with or without
           accents. Use <code className="bg-white/70 px-1 rounded">"quotes"</code> for an exact phrase and{' '}
-          <code className="bg-white/70 px-1 rounded">-word</code> to exclude a word.
+          <code className="bg-white/70 px-1 rounded">-word</code> to exclude a word. More under <strong>Tips</strong>.
         </p>
       </div>
       {results.length > 0 && (
@@ -232,5 +253,56 @@ function RecentDocuments({ results }: { results: SearchResult[] }) {
         </div>
       )}
     </div>
+  )
+}
+
+const EXAMPLES: [string, string][] = [
+  ['contrato alquiler', 'All the words, in any order, in the name, the folder or the text'],
+  ['"planta baja"', 'This exact phrase'],
+  ['factura or albarán', 'Either word'],
+  ['presupuesto -borrador', 'Leave out documents containing a word (or -"a phrase")'],
+  ['INF-2023', 'Part of a file name: dashes, dots and underscores separate words'],
+]
+
+function SearchHelp({ onTry, onClose }: { onTry: (q: string) => void; onClose: () => void }) {
+  return (
+    <section id="search-help" aria-label="Search tips"
+             className="rounded-xl border border-gray-200 bg-white shadow-sm px-5 py-4 text-sm text-gray-700">
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="font-semibold text-gray-900">Search tips</h2>
+        <button type="button" onClick={onClose} aria-label="Close search tips"
+                className="text-gray-400 hover:text-gray-600">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+      <table className="mt-2 w-full">
+        <tbody>
+          {EXAMPLES.map(([example, meaning]) => (
+            <tr key={example} className="align-top">
+              <td className="py-1 pr-4 whitespace-nowrap">
+                <button type="button" onClick={() => onTry(example)} title="Try this search"
+                        className="font-mono text-xs bg-gray-100 hover:bg-blue-50 hover:text-blue-700 rounded px-1.5 py-0.5">
+                  {example}
+                </button>
+              </td>
+              <td className="py-1 text-gray-600">{meaning}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <ul className="mt-3 space-y-1 list-disc pl-5 text-gray-600">
+        <li>Capitals and accents don't matter: <em>informacion</em> finds <em>Información</em>.</li>
+        <li>
+          Other forms of a word match, in Spanish and English: <em>contratos</em> finds <em>contrato</em>.
+          Partial words don't: <em>presu</em> won't find <em>presupuesto</em>.
+        </li>
+        <li>Leave the box empty and pick a share, type or dates to list files, e.g. PDFs changed last month.</li>
+        <li>
+          Some files are found by their name only: old Office formats (.doc, .xls, .ppt), images, drawings,
+          archives and very large files. New files are found by name first and by their text a little later.
+        </li>
+        <li>You only see documents you can open on the file server. Ask the folder's owner if one is missing.</li>
+      </ul>
+    </section>
   )
 }

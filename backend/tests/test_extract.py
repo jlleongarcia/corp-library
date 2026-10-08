@@ -97,7 +97,9 @@ def test_query_parsing():
     p = parse_query('Presupuesto "plan anual" -borrador INF-2023.pdf or acta')
     assert p.terms == ["presupuesto", "plan", "anual", "inf", "2023", "pdf", "acta"]
     assert p.excluded == ["borrador"]
-    assert '"plan anual"' in p.text and "-borrador" in p.text
+    assert '"plan anual"' in p.text and "borrador" not in p.text
+    p = parse_query('-"Versión final" acta -copia-2 -')
+    assert p.excluded == ["version final", "copia 2"] and p.terms == ["acta"]
 
 
 def test_snippet_highlights_original_text():
